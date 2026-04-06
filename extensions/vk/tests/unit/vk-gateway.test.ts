@@ -23,6 +23,7 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
 
 import { resolveVkAccount } from "../../src/accounts.js";
 import { vkGatewayAdapter } from "../../src/gateway.js";
+import type { OpenClawConfig } from "../../src/types.js";
 
 function createResponseHarness() {
   return {
@@ -52,7 +53,7 @@ describe("vk gateway adapter", () => {
     const unregisterMock = vi.fn();
     registerPluginHttpRouteMock.mockReturnValue(unregisterMock);
     const abortController = new AbortController();
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         vk: {
           groupId: 77,
@@ -123,7 +124,7 @@ describe("vk gateway adapter", () => {
     });
 
     const abortController = new AbortController();
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         vk: {
           groupId: 77,

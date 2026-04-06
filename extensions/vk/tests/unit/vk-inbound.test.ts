@@ -33,6 +33,7 @@ import {
 } from "../../src/inbound.js";
 import { resolveVkAccount } from "../../src/accounts.js";
 import { clearVkRuntime, setVkRuntime } from "../../src/runtime.js";
+import type { OpenClawConfig } from "../../src/types.js";
 import { createVkAccessController } from "../../src/vk-core/inbound/access.js";
 
 function createRuntimeMock() {
@@ -86,7 +87,7 @@ describe("vk inbound handling", () => {
       senderAllowedForCommands: true,
       commandAuthorized: true,
     });
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         vk: {
           groupId: 77,
@@ -136,7 +137,7 @@ describe("vk inbound handling", () => {
   });
 
   it("routes allowed group messages through the shared reply dispatcher", async () => {
-    const cfg = {
+    const cfg: OpenClawConfig = {
       channels: {
         vk: {
           groupId: 77,

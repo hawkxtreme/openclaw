@@ -1,6 +1,5 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { createAccountStatusSink, waitUntilAbort } from "openclaw/plugin-sdk/channel-lifecycle";
-import type { ChannelGatewayAdapter } from "openclaw/plugin-sdk/core";
 import {
   beginWebhookRequestPipelineOrReject,
   createWebhookInFlightLimiter,
@@ -9,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { getVkConfig, listVkAccountIds, resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
 import { handleVkInboundMessage } from "./inbound.js";
+import type { VkPlugin } from "./types.js";
 import {
   createVkAccessController,
   createVkCallbackHandler,
@@ -199,7 +199,7 @@ export function createVkCallbackRouteHandler(
   };
 }
 
-export const vkGatewayAdapter: NonNullable<ChannelGatewayAdapter<ResolvedVkAccount>> = {
+export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
   startAccount: async (ctx) => {
     cleanupActiveHandle(ctx.accountId);
 
