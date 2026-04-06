@@ -1,0 +1,42 @@
+{
+  "name": "@openclaw/vk",
+  "version": "2026.4.6",
+  "private": true,
+  "description": "OpenClaw VK channel plugin",
+  "type": "module",
+  "devDependencies": {
+    "openclaw": "workspace:*"
+  },
+  "peerDependencies": {
+    "openclaw": ">=2026.4.6"
+  },
+  "peerDependenciesMeta": {
+    "openclaw": {
+      "optional": true
+    }
+  },
+  "openclaw": {
+    "extensions": [
+      "./index.ts"
+    ],
+    "setupEntry": "./setup-entry.ts",
+    "channel": {
+      "id": "vk",
+      "label": "VK",
+      "selectionLabel": "VK (Callback API)",
+      "detailLabel": "VK Bot",
+      "docsPath": "/channels/vk",
+      "docsLabel": "vk",
+      "blurb": "VK community bot with callback-api and long-poll transport primitives.",
+      "systemImage": "message",
+      "order": 76,
+      "quickstartAllowFrom": true,
+      "markdownCapable": true
+    },
+    "install": {
+      "npmSpec": "@openclaw/vk",
+      "defaultChoice": "npm",
+      "minHostVersion": ">=2026.4.6"
+    }
+  }
+}

@@ -717,6 +717,12 @@ importers:
 
   extensions/video-generation-core: {}
 
+  extensions/vk:
+    devDependencies:
+      openclaw:
+        specifier: workspace:*
+        version: link:../..
+
   extensions/vllm: {}
 
   extensions/voice-call:
