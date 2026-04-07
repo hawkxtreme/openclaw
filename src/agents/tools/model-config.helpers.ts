@@ -30,17 +30,35 @@ export function resolveDefaultModelRef(cfg?: OpenClawConfig): { provider: string
 }
 
 export function hasAuthForProvider(params: { provider: string; agentDir?: string }): boolean {
+  const traceEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = traceEnabled ? Date.now() : 0;
   if (resolveEnvApiKey(params.provider)?.apiKey) {
+    if (traceEnabled) {
+      console.warn(
+        `[tool-auth] provider=${params.provider} return-env-api-key elapsedMs=${Date.now() - startedAt}`,
+      );
+    }
     return true;
   }
   const agentDir = params.agentDir?.trim();
   if (!agentDir) {
+    if (traceEnabled) {
+      console.warn(
+        `[tool-auth] provider=${params.provider} return-no-agent-dir elapsedMs=${Date.now() - startedAt}`,
+      );
+    }
     return false;
   }
   const store = ensureAuthProfileStore(agentDir, {
     allowKeychainPrompt: false,
   });
-  return listProfilesForProvider(store, params.provider).length > 0;
+  const configured = listProfilesForProvider(store, params.provider).length > 0;
+  if (traceEnabled) {
+    console.warn(
+      `[tool-auth] provider=${params.provider} return-store configured=${configured ? "yes" : "no"} elapsedMs=${Date.now() - startedAt}`,
+    );
+  }
+  return configured;
 }
 
 export function coerceToolModelConfig(model?: AgentModelConfig): ToolModelConfig {
