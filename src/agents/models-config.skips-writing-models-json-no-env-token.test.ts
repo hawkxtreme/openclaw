@@ -199,6 +199,92 @@ describe("models-config", () => {
     });
   });
 
+  it("keeps stale existing providers in merge mode", async () => {
+    await withTempHome(async (home) => {
+      const agentDir = path.join(home, "agent-merge-existing");
+      await fs.mkdir(agentDir, { recursive: true });
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                api: "ollama",
+                models: [
+                  {
+                    id: "qwen3.5:9b",
+                    name: "qwen3.5:9b",
+                    input: ["text"],
+                  },
+                ],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      await ensureOpenClawModelsJson(CUSTOM_PROXY_MODELS_CONFIG, agentDir);
+
+      const parsed = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as { providers: Record<string, ParsedProviderConfig> };
+
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["ollama"]?.baseUrl).toBe("http://127.0.0.1:11434");
+    });
+  });
+
+  it("drops stale existing providers when models.mode is replace", async () => {
+    await withTempHome(async (home) => {
+      const agentDir = path.join(home, "agent-replace-existing");
+      await fs.mkdir(agentDir, { recursive: true });
+      process.env.OPENCLAW_AGENT_DIR = agentDir;
+      process.env.PI_CODING_AGENT_DIR = agentDir;
+      await fs.writeFile(
+        path.join(agentDir, "models.json"),
+        `${JSON.stringify(
+          {
+            providers: {
+              ollama: {
+                baseUrl: "http://127.0.0.1:11434",
+                api: "ollama",
+                models: [
+                  {
+                    id: "qwen3.5:9b",
+                    name: "qwen3.5:9b",
+                    input: ["text"],
+                  },
+                ],
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+
+      const replaceConfig = structuredClone(CUSTOM_PROXY_MODELS_CONFIG);
+      replaceConfig.models = {
+        ...replaceConfig.models,
+        mode: "replace",
+      };
+
+      await ensureOpenClawModelsJson(replaceConfig, agentDir);
+
+      const parsed = JSON.parse(
+        await fs.readFile(path.join(agentDir, "models.json"), "utf8"),
+      ) as { providers: Record<string, ParsedProviderConfig> };
+
+      expect(parsed.providers["custom-proxy"]?.baseUrl).toBe("http://localhost:4000/v1");
+      expect(parsed.providers["ollama"]).toBeUndefined();
+    });
+  });
+
   it("adds minimax provider when MINIMAX_API_KEY is set", async () => {
     await withTempHome(async () => {
       await runEnvProviderCase({
