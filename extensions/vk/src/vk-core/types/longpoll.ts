@@ -24,6 +24,7 @@ export type VkInboundMessage = {
   peerId: number;
   senderId: number;
   text: string;
+  messagePayload?: unknown;
   createdAt: number;
   isGroupChat: boolean;
   rawUpdate: unknown;

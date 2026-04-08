@@ -36,6 +36,23 @@ function toOptionalString(value: unknown): string | undefined {
   return normalized || undefined;
 }
 
+function parsePayload(value: unknown): unknown {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const raw = value.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch {
+    return raw;
+  }
+}
+
 function resolveMessageRecord(
   update: VkUpdateEnvelope,
 ): Record<string, unknown> | null {
@@ -111,6 +128,7 @@ export function normalizeVkMessageNewUpdate(params: {
   const conversationMessageId = toOptionalString(
     message.conversation_message_id,
   );
+  const messagePayload = parsePayload(message.payload ?? message.message_payload);
 
   return {
     accountId: params.accountId,
@@ -131,6 +149,7 @@ export function normalizeVkMessageNewUpdate(params: {
     peerId,
     senderId,
     text,
+    messagePayload,
     createdAt,
     isGroupChat: peerId >= VK_GROUP_CHAT_PEER_ID_MIN,
     rawUpdate: params.update,

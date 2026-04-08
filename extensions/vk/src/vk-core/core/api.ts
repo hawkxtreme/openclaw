@@ -178,6 +178,7 @@ export async function sendVkMessage(params: {
   peerId: number;
   message?: string;
   attachment?: string;
+  keyboard?: string;
   randomId: number;
   replyTo?: number;
   disableMentions?: boolean;
@@ -194,6 +195,7 @@ export async function sendVkMessage(params: {
       peer_id: params.peerId,
       message: params.message,
       attachment: params.attachment,
+      keyboard: params.keyboard,
       random_id: params.randomId,
       reply_to: params.replyTo,
       disable_mentions: params.disableMentions ? 1 : undefined,
@@ -204,6 +206,29 @@ export async function sendVkMessage(params: {
   });
 
   return String(response);
+}
+
+export async function setVkMessageActivity(params: {
+  token: string;
+  peerId: number;
+  type?: "typing";
+  groupId?: number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  await vkApi<unknown>({
+    token: params.token,
+    method: "messages.setActivity",
+    apiVersion: params.apiVersion,
+    query: {
+      peer_id: params.peerId,
+      type: params.type ?? "typing",
+      group_id: params.groupId,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
 }
 
 export async function sendVkMessageEventAnswer(params: {

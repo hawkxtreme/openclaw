@@ -1,6 +1,6 @@
 import { randomInt } from "node:crypto";
 
-import { sendVkMessage } from "../core/api.js";
+import { sendVkMessage, setVkMessageActivity } from "../core/api.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import type { VkInboundMessage } from "../types/longpoll.js";
 
@@ -10,6 +10,7 @@ export type VkSendTextOptions = {
   account: ResolvedVkAccount;
   peerId: string | number;
   text: string;
+  keyboard?: string;
   replyTo?: string | number;
   randomId?: number;
   dedupeKey?: string;
@@ -134,6 +135,7 @@ export async function sendVkText(
     token: options.account.token,
     peerId,
     message: text,
+    keyboard: options.keyboard,
     randomId,
     replyTo,
     disableMentions: options.disableMentions,
@@ -157,5 +159,25 @@ export async function sendVkReply(
     ...options,
     peerId: options.message.peerId,
     replyTo: options.message.messageId,
+  });
+}
+
+export async function sendVkTyping(params: {
+  account: ResolvedVkAccount;
+  peerId: string | number;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  if (!params.account.token) {
+    return;
+  }
+
+  await setVkMessageActivity({
+    token: params.account.token,
+    peerId: normalizeVkPeerId(params.peerId),
+    groupId: params.account.config.groupId,
+    apiVersion: params.account.config.apiVersion,
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
   });
 }

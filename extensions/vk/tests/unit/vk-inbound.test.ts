@@ -136,6 +136,112 @@ describe("vk inbound handling", () => {
     });
   });
 
+  it("prefers hidden VK payload commands over visible button labels in DMs", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:payload-1",
+        messageId: "502",
+        peerId: 42,
+        senderId: 42,
+        text: "OpenAI",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+        messagePayload: { oc: "/models openai" },
+      } as never,
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      rawBody: "/models openai",
+    });
+  });
+
+  it("uses plain-string VK payload commands over visible button labels in DMs", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:payload-2",
+        messageId: "504",
+        peerId: 42,
+        senderId: 42,
+        text: "OpenAI",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+        messagePayload: "/models openai",
+      } as never,
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      rawBody: "/models openai",
+    });
+  });
+
   it("routes allowed group messages through the shared reply dispatcher", async () => {
     const cfg: OpenClawConfig = {
       channels: {
@@ -194,5 +300,69 @@ describe("vk inbound handling", () => {
     expect(ctxPayload.ChatType).toBe("group");
     expect(ctxPayload.GroupChannel).toBe("2000000123");
     expect(ctxPayload.WasMentioned).toBe(true);
+  });
+
+  it("passes typing callbacks into DM dispatch and starts VK typing activity", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+    const fetchMock = vi.fn(async (input: string | URL | Request) => {
+      expect(String(input)).toContain("messages.setActivity");
+      return new Response(
+        JSON.stringify({
+          response: 1,
+        }),
+      );
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:typing-1",
+        messageId: "503",
+        peerId: 42,
+        senderId: 42,
+        text: "hello from vk",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const params = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { typingCallbacks?: { onReplyStart: () => Promise<void> } }
+      | undefined;
+    expect(params?.typingCallbacks?.onReplyStart).toBeTypeOf("function");
+    await params?.typingCallbacks?.onReplyStart?.();
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

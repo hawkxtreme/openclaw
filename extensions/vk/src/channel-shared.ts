@@ -16,7 +16,7 @@ export const vkChannelMeta = {
   detailLabel: "VK Bot",
   docsPath: "/channels/vk",
   docsLabel: "vk",
-  blurb: "VK community bot with callback-api and long-poll transport primitives.",
+  blurb: "VK community bot for direct messages and group chats with buttons, media, and official transports.",
   systemImage: "message",
 } as const;
 

@@ -8,6 +8,7 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { getVkConfig, listVkAccountIds, resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
 import { handleVkInboundMessage } from "./inbound.js";
+import { resolveVkCommandFromPayload } from "./keyboard.js";
 import type { VkPlugin } from "./types.js";
 import {
   createVkAccessController,
@@ -22,6 +23,7 @@ import type { OpenClawConfig } from "./types.js";
 
 const CHANNEL_ID = "vk";
 const DEFAULT_CALLBACK_PATH_PREFIX = "/vk/webhook";
+const VK_GROUP_CHAT_PEER_ID_MIN = 2_000_000_000;
 const vkWebhookInFlightLimiter = createWebhookInFlightLimiter();
 
 type VkGatewayLog = {
@@ -81,6 +83,33 @@ function cleanupActiveHandle(accountId: string): void {
   }
   current.stop();
   activeVkGatewayHandles.delete(accountId);
+}
+
+function buildSyntheticMessageFromInteractiveEvent(event: VkMessageEvent) {
+  const payloadCommand =
+    resolveVkCommandFromPayload(event.payload) ??
+    (typeof event.payload === "string" ? event.payload.trim() : undefined);
+  if (!payloadCommand) {
+    return null;
+  }
+
+  return {
+    accountId: event.accountId,
+    groupId: event.groupId,
+    transport: "callback-api" as const,
+    eventType: "message_new" as const,
+    eventId: event.eventId,
+    dedupeKey: event.dedupeKey,
+    messageId: event.conversationMessageId ?? event.callbackEventId,
+    conversationMessageId: event.conversationMessageId,
+    peerId: event.peerId,
+    senderId: event.senderId,
+    text: payloadCommand,
+    messagePayload: event.payload,
+    createdAt: event.createdAt ?? Date.now(),
+    isGroupChat: event.peerId >= VK_GROUP_CHAT_PEER_ID_MIN,
+    rawUpdate: event.rawUpdate,
+  };
 }
 
 function patchLongPollStatus(
@@ -255,6 +284,20 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
         accessController,
         log: ctx.log,
         statusSink,
+        onInteractiveEvent: async (event) => {
+          const syntheticMessage = buildSyntheticMessageFromInteractiveEvent(event);
+          if (!syntheticMessage) {
+            return;
+          }
+          await handleVkInboundMessage({
+            cfg: ctx.cfg as OpenClawConfig,
+            account,
+            message: syntheticMessage,
+            accessController,
+            log: ctx.log,
+            statusSink,
+          });
+        },
       });
       const unregister = registerPluginHttpRoute({
         path,

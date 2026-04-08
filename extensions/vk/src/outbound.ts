@@ -1,18 +1,24 @@
 import { createAttachedChannelResultAdapter } from "openclaw/plugin-sdk/channel-send-result";
 import { buildChannelOutboundSessionRoute } from "openclaw/plugin-sdk/core";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
+import {
+  normalizeInteractiveReply,
+  resolveInteractiveTextFallback,
+} from "openclaw/plugin-sdk/interactive-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import {
   resolveDefaultVkAccountId,
   resolveVkAccount,
   type ResolvedVkAccount,
 } from "./accounts.js";
+import { buildVkKeyboard, resolveVkButtonsFromPayload } from "./keyboard.js";
+import { normalizeVkReplyToId } from "./reply-to.js";
 import { sendVkPayload } from "./vk-core/outbound/media.js";
 import { normalizeVkPeerId, sendVkText } from "./vk-core/outbound/send.js";
 
 const VK_GROUP_CHAT_PEER_ID_MIN = 2_000_000_000;
 
-function normalizeVkTarget(raw: string): string | undefined {
+export function normalizeVkTarget(raw: string): string | undefined {
   const trimmed = raw
     .trim()
     .replace(/^vk:/i, "")
@@ -38,13 +44,15 @@ async function sendVkOutboundPayload(params: {
   replyToId?: string | null;
   mediaLocalRoots?: readonly string[];
   forceDocument?: boolean;
+  keyboard?: string;
 }) {
   const result = await sendVkPayload({
     account: params.account,
     peerId: params.to,
     text: params.text,
+    keyboard: params.keyboard,
     mediaUrls: params.mediaUrls,
-    replyTo: params.replyToId ?? undefined,
+    replyTo: normalizeVkReplyToId(params.replyToId),
     mediaLocalRoots: params.mediaLocalRoots,
     forceDocument: params.forceDocument,
   });
@@ -80,7 +88,17 @@ export const vkOutboundAdapter: NonNullable<ChannelPlugin<ResolvedVkAccount>["ou
       cfg,
       accountId,
     });
-    const parts = resolveSendableOutboundReplyParts(payload);
+    const interactive = normalizeInteractiveReply(payload.interactive);
+    const resolvedText =
+      resolveInteractiveTextFallback({
+        text: payload.text,
+        interactive,
+      }) ?? payload.text;
+    const parts = resolveSendableOutboundReplyParts({
+      ...payload,
+      text: resolvedText,
+    });
+    const keyboard = buildVkKeyboard(resolveVkButtonsFromPayload(payload));
 
     return {
       channel: "vk",
@@ -88,6 +106,7 @@ export const vkOutboundAdapter: NonNullable<ChannelPlugin<ResolvedVkAccount>["ou
         account,
         to,
         text: parts.hasText ? parts.trimmedText : undefined,
+        keyboard,
         mediaUrls: parts.mediaUrls,
         replyToId: replyToId ?? null,
         mediaLocalRoots,
@@ -106,7 +125,7 @@ export const vkOutboundAdapter: NonNullable<ChannelPlugin<ResolvedVkAccount>["ou
         account,
         peerId: to,
         text,
-        replyTo: replyToId ?? undefined,
+        replyTo: normalizeVkReplyToId(replyToId),
       });
 
       return {

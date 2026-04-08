@@ -1,12 +1,15 @@
 import { createChannelPairingController } from "openclaw/plugin-sdk/channel-pairing";
 import { dispatchInboundDirectDmWithRuntime } from "openclaw/plugin-sdk/channel-inbound";
+import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-reply-pipeline";
 import { resolveInboundDirectDmAccessWithRuntime } from "openclaw/plugin-sdk/direct-dm";
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/core";
 import type { ResolvedVkAccount } from "./accounts.js";
+import { resolveVkCommandFromPayload } from "./keyboard.js";
 import { vkOutboundAdapter } from "./outbound.js";
+import { resolveVkInboundReplyToId } from "./reply-to.js";
 import { getVkRuntime } from "./runtime.js";
-import { sendVkText } from "./vk-core/outbound/send.js";
+import { sendVkText, sendVkTyping } from "./vk-core/outbound/send.js";
 import type { VkAccessController } from "./vk-core/types/access.js";
 import type { VkInboundMessage } from "./vk-core/types/longpoll.js";
 import type { OpenClawConfig } from "./types.js";
@@ -108,7 +111,7 @@ async function deliverVkReply(params: {
   cfg: OpenClawConfig;
   accountId: string;
   to: string;
-  replyToId: string;
+  replyToId?: string;
   payload: unknown;
   statusSink?: VkInboundStatusSink;
 }) {
@@ -128,6 +131,26 @@ async function deliverVkReply(params: {
   params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
+function createVkTypingCallbacks(params: {
+  account: ResolvedVkAccount;
+  message: VkInboundMessage;
+  log?: VkInboundLog;
+}) {
+  return createTypingCallbacks({
+    start: async () => {
+      await sendVkTyping({
+        account: params.account,
+        peerId: params.message.peerId,
+      });
+    },
+    onStartError: (error) => {
+      params.log?.warn?.(
+        `[${params.account.accountId}] VK typing activity failed: ${String(error)}`,
+      );
+    },
+  });
+}
+
 export async function handleVkInboundMessage(params: {
   cfg: OpenClawConfig;
   account: ResolvedVkAccount;
@@ -137,7 +160,20 @@ export async function handleVkInboundMessage(params: {
   statusSink?: VkInboundStatusSink;
 }): Promise<void> {
   const { cfg, account, message, accessController, log, statusSink } = params;
-  const rawBody = message.text.trim();
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const inboundStartedAt = ingressTimingEnabled ? Date.now() : 0;
+  const traceInbound = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    log?.debug?.(
+      `[${account.accountId}] VK inbound ${step} message=${message.messageId} elapsedMs=${Date.now() - inboundStartedAt}`,
+    );
+  };
+
+  traceInbound("start");
+  const visibleBody = message.text.trim();
+  const rawBody = resolveVkCommandFromPayload(message.messagePayload) ?? visibleBody;
   if (!rawBody) {
     log?.debug?.(
       `[${account.accountId}] skipping VK message ${message.messageId} without text content`,
@@ -145,6 +181,7 @@ export async function handleVkInboundMessage(params: {
     return;
   }
 
+  traceInbound("body-ready");
   const core = getVkRuntime();
   statusSink?.({
     lastInboundAt: message.createdAt,
@@ -152,6 +189,12 @@ export async function handleVkInboundMessage(params: {
     lastMessageAt: message.createdAt,
     lastError: null,
   });
+  const typingCallbacks = createVkTypingCallbacks({
+    account,
+    message,
+    log,
+  });
+  traceInbound("runtime-ready");
 
   if (message.isGroupChat) {
     const groupAccess = accessController?.evaluateMessage({ account, message });
@@ -223,7 +266,7 @@ export async function handleVkInboundMessage(params: {
       Surface: CHANNEL_ID,
       MessageSid: message.messageId,
       MessageSidFull: message.messageId,
-      ReplyToId: message.messageId,
+      ReplyToId: resolveVkInboundReplyToId(message) ?? message.messageId,
       Timestamp: message.createdAt,
       OriginatingChannel: CHANNEL_ID,
       OriginatingTo: `vk:${String(message.peerId)}`,
@@ -243,7 +286,7 @@ export async function handleVkInboundMessage(params: {
           cfg,
           accountId: account.accountId,
           to: String(message.peerId),
-          replyToId: message.messageId,
+          replyToId: resolveVkInboundReplyToId(message),
           payload,
           statusSink,
         }),
@@ -257,6 +300,7 @@ export async function handleVkInboundMessage(params: {
         statusSink?.({ lastError: rendered });
         log?.error?.(`[${account.accountId}] VK ${info.kind} reply failed: ${rendered}`);
       },
+      typingCallbacks,
     });
     return;
   }
@@ -277,6 +321,7 @@ export async function handleVkInboundMessage(params: {
     channel: CHANNEL_ID,
     accountId: account.accountId,
   });
+  traceInbound("before-dm-access");
   const dmAccess = await resolveInboundDirectDmAccessWithRuntime({
     cfg,
     channel: CHANNEL_ID,
@@ -293,6 +338,7 @@ export async function handleVkInboundMessage(params: {
     },
     readStoreAllowFrom: pairing.readStoreForDmPolicy,
   });
+  traceInbound("after-dm-access");
 
   if (dmAccess.access.decision === "pairing") {
     await pairing.issueChallenge({
@@ -303,7 +349,7 @@ export async function handleVkInboundMessage(params: {
           account,
           peerId: message.peerId,
           text,
-          replyTo: message.messageId,
+          replyTo: resolveVkInboundReplyToId(message),
         });
         statusSink?.({ lastOutboundAt: Date.now() });
       },
@@ -326,6 +372,7 @@ export async function handleVkInboundMessage(params: {
     return;
   }
 
+  traceInbound("before-dm-dispatch");
   await dispatchInboundDirectDmWithRuntime({
     cfg,
     runtime: core,
@@ -349,7 +396,7 @@ export async function handleVkInboundMessage(params: {
         cfg,
         accountId: account.accountId,
         to: String(message.peerId),
-        replyToId: message.messageId,
+        replyToId: resolveVkInboundReplyToId(message),
         payload,
         statusSink,
       }),
@@ -363,5 +410,7 @@ export async function handleVkInboundMessage(params: {
       statusSink?.({ lastError: rendered });
       log?.error?.(`[${account.accountId}] VK ${info.kind} reply failed: ${rendered}`);
     },
+    typingCallbacks,
   });
+  traceInbound("after-dm-dispatch");
 }

@@ -2,7 +2,14 @@ import { createChatChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
+import { vkMessageActions } from "./channel-actions.js";
 import { vkChannelPluginCommon, vkSecurityAdapter } from "./channel-shared.js";
+import {
+  buildVkCommandsListChannelData,
+  buildVkModelBrowseChannelData,
+  buildVkModelsListChannelData,
+  buildVkModelsProviderChannelData,
+} from "./command-ui.js";
 import { vkGatewayAdapter } from "./gateway.js";
 import { resolveVkGroupRequireMention } from "./group-policy.js";
 import { vkMessagingAdapter, vkOutboundAdapter } from "./outbound.js";
@@ -18,10 +25,20 @@ export const vkPlugin: ChannelPlugin<ResolvedVkAccount, VkProbeResult> = createC
     setup: vkSetupAdapter,
     status: vkStatusAdapter,
     messaging: vkMessagingAdapter,
+    commands: {
+      buildCommandsListChannelData: buildVkCommandsListChannelData,
+      buildModelsProviderChannelData: buildVkModelsProviderChannelData,
+      buildModelsListChannelData: buildVkModelsListChannelData,
+      buildModelBrowseChannelData: buildVkModelBrowseChannelData,
+    },
     groups: {
       resolveRequireMention: resolveVkGroupRequireMention,
     },
     gateway: vkGatewayAdapter,
+    agentPrompt: {
+      messageToolCapabilities: () => ["inlineButtons"],
+    },
+    actions: vkMessageActions,
   },
   pairing: {
     text: {

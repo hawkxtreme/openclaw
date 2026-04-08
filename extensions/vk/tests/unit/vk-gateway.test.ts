@@ -7,6 +7,7 @@ const beginWebhookRequestPipelineOrRejectMock = vi.hoisted(() =>
   })),
 );
 const createWebhookInFlightLimiterMock = vi.hoisted(() => vi.fn(() => ({ release: vi.fn() })));
+const handleVkInboundMessageMock = vi.hoisted(() => vi.fn());
 const readWebhookBodyOrRejectMock = vi.hoisted(() => vi.fn());
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn());
 
@@ -18,6 +19,14 @@ vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
     createWebhookInFlightLimiter: createWebhookInFlightLimiterMock,
     readWebhookBodyOrReject: readWebhookBodyOrRejectMock,
     registerPluginHttpRoute: registerPluginHttpRouteMock,
+  };
+});
+
+vi.mock("../../src/inbound.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/inbound.js")>();
+  return {
+    ...actual,
+    handleVkInboundMessage: handleVkInboundMessageMock,
   };
 });
 
@@ -40,6 +49,7 @@ function createResponseHarness() {
 
 describe("vk gateway adapter", () => {
   beforeEach(() => {
+    handleVkInboundMessageMock.mockReset();
     registerPluginHttpRouteMock.mockReset();
     readWebhookBodyOrRejectMock.mockReset();
     beginWebhookRequestPipelineOrRejectMock.mockClear();
@@ -168,6 +178,88 @@ describe("vk gateway adapter", () => {
     expect(beginWebhookRequestPipelineOrRejectMock).toHaveBeenCalledTimes(1);
     expect(res.statusCode).toBe(200);
     expect(res.end).toHaveBeenCalledWith("confirm-77");
+
+    abortController.abort();
+    await started;
+    expect(unregisterMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes callback message_event payloads into the inbound message handler", async () => {
+    const unregisterMock = vi.fn();
+    let registeredHandler:
+      | ((req: unknown, res: unknown) => Promise<boolean | void> | boolean | void)
+      | undefined;
+    registerPluginHttpRouteMock.mockImplementation((params) => {
+      registeredHandler = params.handler;
+      return unregisterMock;
+    });
+    readWebhookBodyOrRejectMock.mockResolvedValue({
+      ok: true,
+      value: JSON.stringify({
+        type: "message_event",
+        group_id: 77,
+        event_id: "evt-interactive-1",
+        secret: "replace-me-callback-secret",
+        object: {
+          user_id: 42,
+          peer_id: 2_000_000_123,
+          event_id: "callback-event-1",
+          conversation_message_id: 99,
+          payload: JSON.stringify({ oc: "/models openai" }),
+        },
+      }),
+    });
+
+    const abortController = new AbortController();
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          callback: {
+            path: "/plugins/vk/webhook/default",
+            secret: "replace-me-callback-secret",
+            confirmationCode: "confirm-77",
+          },
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    const started = vkGatewayAdapter.startAccount?.({
+      cfg,
+      accountId: "default",
+      account,
+      runtime: {} as never,
+      abortSignal: abortController.signal,
+      log: {
+        info: vi.fn(),
+        warn: vi.fn(),
+        error: vi.fn(),
+      },
+      getStatus: () => ({ accountId: "default" }),
+      setStatus: vi.fn(),
+    });
+
+    expect(registeredHandler).toBeTypeOf("function");
+    const { res } = createResponseHarness();
+    const req = {
+      method: "POST",
+    };
+
+    await registeredHandler?.(req, res);
+
+    expect(handleVkInboundMessageMock).toHaveBeenCalledTimes(1);
+    expect(handleVkInboundMessageMock.mock.calls[0]?.[0]).toMatchObject({
+      message: {
+        text: "/models openai",
+        peerId: 2_000_000_123,
+        senderId: 42,
+      },
+    });
 
     abortController.abort();
     await started;

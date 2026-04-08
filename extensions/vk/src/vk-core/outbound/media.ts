@@ -94,6 +94,7 @@ export type VkSendPayloadOptions = {
   account: ResolvedVkAccount;
   peerId: string | number;
   text?: string;
+  keyboard?: string;
   mediaUrl?: string;
   mediaUrls?: string[];
   replyTo?: string | number;
@@ -659,6 +660,7 @@ export async function sendVkPayload(
     peerId,
     message: text,
     attachment: attachments.length > 0 ? attachments.join(",") : undefined,
+    keyboard: options.keyboard,
     randomId,
     replyTo:
       options.replyTo !== undefined
