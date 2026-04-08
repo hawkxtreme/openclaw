@@ -41,7 +41,9 @@ function describeVkMessageTool({
 
 function buildVkActionPayload(params: Record<string, unknown>) {
   const message = readStringParam(params, "message", { allowEmpty: true }) ?? "";
-  const media = readStringParam(params, "media", { trim: false });
+  const media =
+    readStringParam(params, "media", { trim: false }) ??
+    readStringParam(params, "mediaUrl", { trim: false });
   const interactive =
     params.interactive && typeof params.interactive === "object" && !Array.isArray(params.interactive)
       ? params.interactive
