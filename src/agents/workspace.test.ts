@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { makeTempWorkspace, writeWorkspaceFile } from "../test-helpers/workspace.js";
 import {
   DEFAULT_AGENTS_FILENAME,
@@ -88,6 +88,25 @@ describe("ensureAgentWorkspace", () => {
     await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
 
     await expectBootstrapSeeded(tempDir);
+  });
+
+  it("skips bootstrap rewrites for already-seeded workspaces when core files still exist", async () => {
+    const tempDir = await makeTempWorkspace("openclaw-workspace-");
+    await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+
+    const writeSpy = vi.spyOn(fs, "writeFile");
+    const readSpy = vi.spyOn(fs, "readFile");
+    writeSpy.mockClear();
+    readSpy.mockClear();
+
+    try {
+      await ensureAgentWorkspace({ dir: tempDir, ensureBootstrapFiles: true });
+      expect(writeSpy).not.toHaveBeenCalled();
+      expect(readSpy).not.toHaveBeenCalled();
+    } finally {
+      readSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
   });
 
   it("does not recreate BOOTSTRAP.md after completion, even when a core file is recreated", async () => {

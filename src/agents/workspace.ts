@@ -108,10 +108,32 @@ async function loadTemplate(name: string): Promise<string> {
   }
 
   const pending = (async () => {
+    const templateTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+    const templateTimingStartMs = templateTimingEnabled ? Date.now() : 0;
+    const traceTemplate = (step: string, extra?: Record<string, string>) => {
+      if (!templateTimingEnabled) {
+        return;
+      }
+      const renderedExtra =
+        extra && Object.keys(extra).length > 0
+          ? ` ${Object.entries(extra)
+              .map(([key, value]) => `${key}=${value}`)
+              .join(" ")}`
+          : "";
+      console.warn(
+        `[load-template] ${step} name=${name}${renderedExtra} elapsedMs=${Date.now() - templateTimingStartMs}`,
+      );
+    };
+    traceTemplate("start");
     const templateDir = await resolveWorkspaceTemplateDir();
+    traceTemplate("after-resolveWorkspaceTemplateDir", { templateDir });
     const templatePath = path.join(templateDir, name);
     try {
-      const content = await fs.readFile(templatePath, "utf-8");
+      traceTemplate("before-readFile", { templatePath });
+      // These bootstrap templates are tiny, immutable, and cached after first load.
+      // A sync read keeps the hot path off the libuv fs worker queue.
+      const content = syncFs.readFileSync(templatePath, "utf-8");
+      traceTemplate("after-readFile", { templatePath });
       return stripFrontMatter(content);
     } catch {
       throw new Error(
@@ -233,7 +255,9 @@ function parseWorkspaceSetupState(raw: string): WorkspaceSetupState | null {
 
 async function readWorkspaceSetupState(statePath: string): Promise<WorkspaceSetupState> {
   try {
-    const raw = await fs.readFile(statePath, "utf-8");
+    // This state file is tiny and sits directly on the seeded-workspace hot path.
+    // Use a sync read here to avoid waiting behind unrelated fs/promises work.
+    const raw = syncFs.readFileSync(statePath, "utf-8");
     const parsed = parseWorkspaceSetupState(raw);
     if (
       parsed &&
@@ -339,7 +363,19 @@ export async function ensureAgentWorkspace(params?: {
 }> {
   const rawDir = params?.dir?.trim() ? params.dir.trim() : DEFAULT_AGENT_WORKSPACE_DIR;
   const dir = resolveUserPath(rawDir);
+  const workspaceTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const workspaceTimingStartMs = workspaceTimingEnabled ? Date.now() : 0;
+  const traceWorkspace = (step: string) => {
+    if (!workspaceTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[ensure-agent-workspace] ${step} dir=${dir} elapsedMs=${Date.now() - workspaceTimingStartMs}`,
+    );
+  };
+  traceWorkspace("start");
   await fs.mkdir(dir, { recursive: true });
+  traceWorkspace("after-mkdir");
 
   if (!params?.ensureBootstrapFiles) {
     return { dir };
@@ -354,6 +390,7 @@ export async function ensureAgentWorkspace(params?: {
   const bootstrapPath = path.join(dir, DEFAULT_BOOTSTRAP_FILENAME);
   const statePath = resolveWorkspaceStatePath(dir);
 
+  traceWorkspace("before-isBrandNewWorkspace");
   const isBrandNewWorkspace = await (async () => {
     const templatePaths = [agentsPath, soulPath, toolsPath, identityPath, userPath, heartbeatPath];
     const userContentPaths = [
@@ -374,21 +411,11 @@ export async function ensureAgentWorkspace(params?: {
     );
     return existing.every((v) => !v);
   })();
+  traceWorkspace("after-isBrandNewWorkspace");
 
-  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
-  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
-  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
-  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
-  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
-  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
-  await writeFileIfMissing(agentsPath, agentsTemplate);
-  await writeFileIfMissing(soulPath, soulTemplate);
-  await writeFileIfMissing(toolsPath, toolsTemplate);
-  await writeFileIfMissing(identityPath, identityTemplate);
-  await writeFileIfMissing(userPath, userTemplate);
-  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
-
+  traceWorkspace("before-readWorkspaceSetupState");
   let state = await readWorkspaceSetupState(statePath);
+  traceWorkspace("after-readWorkspaceSetupState");
   let stateDirty = false;
   const markState = (next: Partial<WorkspaceSetupState>) => {
     state = { ...state, ...next };
@@ -397,6 +424,52 @@ export async function ensureAgentWorkspace(params?: {
   const nowIso = () => new Date().toISOString();
 
   let bootstrapExists = await fileExists(bootstrapPath);
+  const hotBootstrapPaths = [
+    agentsPath,
+    soulPath,
+    toolsPath,
+    identityPath,
+    userPath,
+    heartbeatPath,
+  ];
+  if (!isBrandNewWorkspace && state.bootstrapSeededAt && bootstrapExists) {
+    traceWorkspace("before-checkHotBootstrapFiles");
+    const hasAllCoreBootstrapFiles = (
+      await Promise.all(hotBootstrapPaths.map((candidatePath) => fileExists(candidatePath)))
+    ).every(Boolean);
+    traceWorkspace("after-checkHotBootstrapFiles");
+    if (hasAllCoreBootstrapFiles) {
+      traceWorkspace("hot-return-seeded-workspace");
+      return {
+        dir,
+        agentsPath,
+        soulPath,
+        toolsPath,
+        identityPath,
+        userPath,
+        heartbeatPath,
+        bootstrapPath,
+      };
+    }
+  }
+
+  traceWorkspace("before-loadTemplates");
+  const agentsTemplate = await loadTemplate(DEFAULT_AGENTS_FILENAME);
+  const soulTemplate = await loadTemplate(DEFAULT_SOUL_FILENAME);
+  const toolsTemplate = await loadTemplate(DEFAULT_TOOLS_FILENAME);
+  const identityTemplate = await loadTemplate(DEFAULT_IDENTITY_FILENAME);
+  const userTemplate = await loadTemplate(DEFAULT_USER_FILENAME);
+  const heartbeatTemplate = await loadTemplate(DEFAULT_HEARTBEAT_FILENAME);
+  traceWorkspace("after-loadTemplates");
+  traceWorkspace("before-writeBootstrapFiles");
+  await writeFileIfMissing(agentsPath, agentsTemplate);
+  await writeFileIfMissing(soulPath, soulTemplate);
+  await writeFileIfMissing(toolsPath, toolsTemplate);
+  await writeFileIfMissing(identityPath, identityTemplate);
+  await writeFileIfMissing(userPath, userTemplate);
+  await writeFileIfMissing(heartbeatPath, heartbeatTemplate);
+  traceWorkspace("after-writeBootstrapFiles");
+
   if (!state.bootstrapSeededAt && bootstrapExists) {
     markState({ bootstrapSeededAt: nowIso() });
   }
@@ -448,9 +521,13 @@ export async function ensureAgentWorkspace(params?: {
   }
 
   if (stateDirty) {
+    traceWorkspace("before-writeWorkspaceSetupState");
     await writeWorkspaceSetupState(statePath, state);
+    traceWorkspace("after-writeWorkspaceSetupState");
   }
+  traceWorkspace("before-ensureGitRepo");
   await ensureGitRepo(dir, isBrandNewWorkspace);
+  traceWorkspace("after-ensureGitRepo");
 
   return {
     dir,

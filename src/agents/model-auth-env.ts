@@ -2,7 +2,7 @@ import { getEnvApiKey } from "@mariozechner/pi-ai";
 import { getShellEnvAppliedKeys } from "../infra/shell-env.js";
 import { resolvePluginSetupProvider } from "../plugins/setup-registry.js";
 import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
-import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
+import { PROVIDER_ENV_API_KEY_CANDIDATES } from "./model-auth-env-vars.js";
 import { GCP_VERTEX_CREDENTIALS_MARKER } from "./model-auth-markers.js";
 import { normalizeProviderIdForAuth } from "./provider-id.js";
 
@@ -16,7 +16,6 @@ export function resolveEnvApiKey(
   env: NodeJS.ProcessEnv = process.env,
 ): EnvApiKeyResult | null {
   const normalized = normalizeProviderIdForAuth(provider);
-  const candidateMap = resolveProviderEnvApiKeyCandidates();
   const applied = new Set(getShellEnvAppliedKeys());
   const pick = (envVar: string): EnvApiKeyResult | null => {
     const value = normalizeOptionalSecretInput(env[envVar]);
@@ -27,7 +26,9 @@ export function resolveEnvApiKey(
     return { apiKey: value, source };
   };
 
-  const candidates = Object.hasOwn(candidateMap, normalized) ? candidateMap[normalized] : undefined;
+  const candidates = Object.hasOwn(PROVIDER_ENV_API_KEY_CANDIDATES, normalized)
+    ? PROVIDER_ENV_API_KEY_CANDIDATES[normalized]
+    : undefined;
   if (Array.isArray(candidates)) {
     for (const envVar of candidates) {
       const resolved = pick(envVar);

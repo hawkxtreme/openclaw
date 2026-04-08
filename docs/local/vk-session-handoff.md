@@ -441,3 +441,68 @@ corepack pnpm vitest run --config vitest.extensions.config.ts
   the next best bounded optimization should target provider-auth probing itself, especially the
   repeated expensive providers in image-generation and pdf registration, not capability registry
   loading.
+
+## 2026-04-08 Static env auth candidate hot path
+
+- Root cause:
+  `src/agents/model-auth-env.ts` rebuilt the provider env candidate map on every
+  `resolveEnvApiKey(...)` call, even though `src/agents/model-auth-env-vars.ts` already exports a
+  stable `PROVIDER_ENV_API_KEY_CANDIDATES` constant.
+- Fix:
+  `src/agents/model-auth-env.ts` now reads provider candidates from the prebuilt constant instead
+  of calling `resolveProviderEnvApiKeyCandidates()` per auth probe.
+- Regression coverage:
+  `src/agents/model-auth-env.test.ts` now verifies the static candidate map is used without
+  rebuilding the candidate registry per call.
+- Validation:
+  - `corepack pnpm test src/agents/model-auth-env.test.ts`
+  - `corepack pnpm test src/agents/model-auth.profiles.test.ts`
+  - `corepack pnpm exec tsdown --config-loader unrun --logLevel warn`
+- Synthetic replay result:
+  - individual `provider-auth` / `tool-auth` checks dropped into the `~16-55ms` range
+  - `create-openclaw-tools after-core-openclaw-tools` dropped further to about `4.0s`
+  - the same replay still reached `handle-ok`, but overall remained about `86.2s`
+- Practical conclusion:
+  provider auth probing was no longer the top-level blocker after this fix; the remaining runtime
+  cost had moved farther down the shared agent/runtime path.
+
+## 2026-04-08 Seeded workspace state hot path
+
+- New trace after the auth fix showed a large, non-VK hotspot on the seeded workspace fast path:
+  `ensureAgentWorkspace(...) -> readWorkspaceSetupState(...)` was taking about `11.7s` even though
+  the state file itself is only a tiny local JSON file.
+- Local confirmation:
+  direct shell reads of
+  `C:\\Users\\user\\AppData\\Local\\Temp\\openclaw-vk-live-e2e-clean-merge\\workspace\\.openclaw\\workspace-state.json`
+  completed in about `0.1ms` after warmup, which pointed to `fs/promises` queue contention rather
+  than real disk I/O.
+- Fix:
+  `src/agents/workspace.ts` now reads `workspace-state.json` via `syncFs.readFileSync(...)` on the
+  seeded-workspace hot path instead of `await fs.readFile(...)`.
+- Regression coverage:
+  `src/agents/workspace.test.ts` now verifies the already-seeded second pass returns without using
+  `fs.promises.readFile(...)`.
+- Validation:
+  - `corepack pnpm test src/agents/workspace.test.ts`
+  - `corepack pnpm exec tsdown --config-loader unrun --logLevel warn`
+- Synthetic replay result after this fix:
+  - `before-readWorkspaceSetupState -> after-readWorkspaceSetupState`: `~1ms`
+  - `hot-return-seeded-workspace`: `~4ms`
+  - `after-core-openclaw-tools`: `~3.9s`
+  - `handle-ok`: `~74.0s`
+- Current timing snapshot after the workspace fix:
+  - `after-loadPiEmbeddedRuntime`: `~9.3s`
+  - `after-buildFollowupRun`: `~13.0s`
+  - `after-ensureRuntimePluginsLoaded`: `~18.3s`
+  - `after-ensureOpenClawModelsJson`: `~22.0s`
+  - `after-resolveModelAsync`: `~28.1s`
+  - `after-createOpenClawCodingTools`: `~4.8s` inside the embedded attempt
+  - `after-activeSessionPrompt`: `~13.7s` inside the embedded attempt
+  - `after-runEmbeddedPiAgent`: `~42.8s`
+  - `after-runReplyAgent`: `~61.5s`
+- Practical conclusion:
+  the next best bounded step is no longer workspace or provider-auth. The biggest remaining
+  candidate seams are now:
+  - `ensureRuntimePluginsLoaded(...)`
+  - the embedded attempt path around session/MCP/docs/bootstrap work before prompt execution
+  - post-run reply finalization after `runAgentTurnWithFallback(...)`
