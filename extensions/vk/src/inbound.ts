@@ -183,6 +183,7 @@ export async function handleVkInboundMessage(params: {
 
   traceInbound("body-ready");
   const core = getVkRuntime();
+  const replyToId = resolveVkInboundReplyToId(message);
   statusSink?.({
     lastInboundAt: message.createdAt,
     lastEventAt: message.createdAt,
@@ -266,7 +267,7 @@ export async function handleVkInboundMessage(params: {
       Surface: CHANNEL_ID,
       MessageSid: message.messageId,
       MessageSidFull: message.messageId,
-      ReplyToId: resolveVkInboundReplyToId(message) ?? message.messageId,
+      ReplyToId: replyToId,
       Timestamp: message.createdAt,
       OriginatingChannel: CHANNEL_ID,
       OriginatingTo: `vk:${String(message.peerId)}`,
@@ -286,7 +287,7 @@ export async function handleVkInboundMessage(params: {
           cfg,
           accountId: account.accountId,
           to: String(message.peerId),
-          replyToId: resolveVkInboundReplyToId(message),
+          replyToId,
           payload,
           statusSink,
         }),
@@ -349,7 +350,7 @@ export async function handleVkInboundMessage(params: {
           account,
           peerId: message.peerId,
           text,
-          replyTo: resolveVkInboundReplyToId(message),
+          replyTo: replyToId,
         });
         statusSink?.({ lastOutboundAt: Date.now() });
       },
@@ -392,14 +393,14 @@ export async function handleVkInboundMessage(params: {
     timestamp: message.createdAt,
     commandAuthorized: dmAccess.commandAuthorized,
     deliver: async (payload) =>
-      await deliverVkReply({
-        cfg,
-        accountId: account.accountId,
-        to: String(message.peerId),
-        replyToId: resolveVkInboundReplyToId(message),
-        payload,
-        statusSink,
-      }),
+        await deliverVkReply({
+          cfg,
+          accountId: account.accountId,
+          to: String(message.peerId),
+          replyToId,
+          payload,
+          statusSink,
+        }),
     onRecordError: (error) => {
       const rendered = String(error);
       statusSink?.({ lastError: rendered });

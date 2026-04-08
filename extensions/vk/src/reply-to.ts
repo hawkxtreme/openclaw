@@ -9,7 +9,16 @@ export function normalizeVkReplyToId(value: string | number | null | undefined):
 }
 
 export function resolveVkInboundReplyToId(
-  message: Pick<VkInboundMessage, "conversationMessageId" | "messageId">,
+  message: Pick<VkInboundMessage, "conversationMessageId" | "messageId" | "isGroupChat">,
 ): string | undefined {
-  return normalizeVkReplyToId(message.conversationMessageId) ?? normalizeVkReplyToId(message.messageId);
+  if (message.isGroupChat) {
+    return undefined;
+  }
+
+  const conversationMessageId = normalizeVkReplyToId(message.conversationMessageId);
+  if (conversationMessageId) {
+    return conversationMessageId;
+  }
+
+  return normalizeVkReplyToId(message.messageId);
 }

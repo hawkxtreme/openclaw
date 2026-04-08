@@ -302,6 +302,74 @@ describe("vk inbound handling", () => {
     expect(ctxPayload.WasMentioned).toBe(true);
   });
 
+  it("omits VK group reply_to when only a global message id is available", async () => {
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          groupPolicy: "open",
+          groups: {
+            "2000000123": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+    const accessController = createVkAccessController();
+    let requestedUrl: URL | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9006,
+          }),
+        );
+      }),
+    );
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      accessController,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "long-poll",
+        eventType: "message_new",
+        dedupeKey: "event:group-reply-fallback",
+        messageId: "0",
+        peerId: 2000000123,
+        senderId: 42,
+        text: "@club77 hello group",
+        createdAt: 1700000100000,
+        isGroupChat: true,
+        rawUpdate: {},
+      },
+    });
+
+    const params = dispatchInboundReplyWithBaseMock.mock.calls[0]?.[0] as
+      | {
+          ctxPayload?: Record<string, unknown>;
+          deliver?: (payload: unknown) => Promise<void>;
+        }
+      | undefined;
+
+    expect(params?.ctxPayload?.ReplyToId).toBeUndefined();
+    await params?.deliver?.({
+      text: "Reply text",
+    });
+
+    expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
+  });
+
   it("passes typing callbacks into DM dispatch and starts VK typing activity", async () => {
     resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
       access: {

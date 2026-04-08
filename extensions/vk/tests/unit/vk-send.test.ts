@@ -145,6 +145,79 @@ describe("vk outbound text", () => {
     expect(requestedUrl?.searchParams.get("reply_to")).toBe("501");
   });
 
+  it("does not fall back to a group message global id for reply_to", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+    const inbound = {
+      accountId: account.accountId,
+      groupId: 77,
+      transport: "long-poll",
+      eventType: "message_new",
+      dedupeKey: "event:group-1",
+      messageId: "0",
+      peerId: 2_000_000_001,
+      senderId: 42,
+      text: "Incoming group message",
+      createdAt: 1_700_000_000_000,
+      isGroupChat: true,
+      rawUpdate: {},
+    } as const;
+
+    await sendVkReply({
+      account,
+      message: inbound,
+      text: "Reply text",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9101,
+          }),
+        );
+      },
+    });
+
+    expect(requestedUrl?.searchParams.get("peer_id")).toBe("2000000001");
+    expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
+  });
+
+  it("omits group reply_to even when VK provides a conversation message id", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+    const inbound = {
+      accountId: account.accountId,
+      groupId: 77,
+      transport: "long-poll",
+      eventType: "message_new",
+      dedupeKey: "event:group-2",
+      messageId: "0",
+      conversationMessageId: "17",
+      peerId: 2_000_000_001,
+      senderId: 42,
+      text: "Incoming group message",
+      createdAt: 1_700_000_000_000,
+      isGroupChat: true,
+      rawUpdate: {},
+    } as const;
+
+    await sendVkReply({
+      account,
+      message: inbound,
+      text: "Reply text",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9102,
+          }),
+        );
+      },
+    });
+
+    expect(requestedUrl?.searchParams.get("peer_id")).toBe("2000000001");
+    expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
+  });
+
   it("fails fast on missing token or invalid peer ids", async () => {
     const account = createAccount({
       config: {

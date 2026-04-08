@@ -1,5 +1,6 @@
 import { randomInt } from "node:crypto";
 
+import { resolveVkInboundReplyToId } from "../../reply-to.js";
 import { sendVkMessage, setVkMessageActivity } from "../core/api.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import type { VkInboundMessage } from "../types/longpoll.js";
@@ -158,7 +159,7 @@ export async function sendVkReply(
   return await sendVkText({
     ...options,
     peerId: options.message.peerId,
-    replyTo: options.message.messageId,
+    replyTo: resolveVkInboundReplyToId(options.message),
   });
 }
 
