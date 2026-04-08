@@ -1,4 +1,4 @@
-import { iterateBootstrapChannelPlugins } from "../channels/plugins/bootstrap-registry.js";
+import { getBootstrapChannelPlugin } from "../channels/plugins/bootstrap-registry.js";
 import { loadBundledPluginPublicSurfaceModuleSync } from "../plugin-sdk/facade-runtime.js";
 import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 import type { SecretTargetRegistryEntry } from "./target-registry-types.js";
@@ -9,6 +9,23 @@ const SIBLING_REF_SHAPE = "sibling_ref"; // pragma: allowlist secret
 function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
   const entries: SecretTargetRegistryEntry[] = [];
   const handledChannelIds = new Set<string>();
+  const fallbackChannelIds: string[] = [];
+  const queuedFallbackChannelIds = new Set<string>();
+
+  const queueFallbackChannels = (channelIds: readonly string[]) => {
+    for (const channelId of channelIds) {
+      const normalizedChannelId = channelId.trim();
+      if (
+        !normalizedChannelId ||
+        handledChannelIds.has(normalizedChannelId) ||
+        queuedFallbackChannelIds.has(normalizedChannelId)
+      ) {
+        continue;
+      }
+      queuedFallbackChannelIds.add(normalizedChannelId);
+      fallbackChannelIds.push(normalizedChannelId);
+    }
+  };
 
   for (const metadata of listBundledPluginMetadata({
     includeChannelConfigs: false,
@@ -19,6 +36,7 @@ function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
       continue;
     }
     if (!metadata.publicSurfaceArtifacts?.includes("contract-api.js")) {
+      queueFallbackChannels(channelIds);
       continue;
     }
     try {
@@ -33,11 +51,16 @@ function listChannelSecretTargetRegistryEntries(): SecretTargetRegistryEntry[] {
     } catch {
       // Fall back to the full bootstrap plugin surface for channels that do not
       // expose a usable secret contract artifact.
+      queueFallbackChannels(channelIds);
     }
   }
 
-  for (const plugin of iterateBootstrapChannelPlugins()) {
-    if (handledChannelIds.has(plugin.id)) {
+  for (const channelId of fallbackChannelIds) {
+    if (handledChannelIds.has(channelId)) {
+      continue;
+    }
+    const plugin = getBootstrapChannelPlugin(channelId);
+    if (!plugin) {
       continue;
     }
     entries.push(...(plugin.secrets?.secretTargetRegistryEntries ?? []));
