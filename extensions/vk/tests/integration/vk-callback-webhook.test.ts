@@ -52,6 +52,27 @@ describe("vk callback webhook", () => {
     });
   });
 
+  it("returns confirmation code even when VK omits the secret", async () => {
+    const handler = createVkCallbackHandler({
+      config: createConfig(),
+    });
+
+    const result = await handler({
+      method: "POST",
+      body: JSON.stringify({
+        type: "confirmation",
+        group_id: 77,
+      }),
+    });
+
+    expect(result).toEqual({
+      statusCode: 200,
+      body: "confirm-77",
+      eventType: "confirmation",
+      accountId: "default",
+    });
+  });
+
   it("rejects invalid secrets before processing the payload", async () => {
     const handler = createVkCallbackHandler({
       config: createConfig(),

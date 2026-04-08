@@ -1,6 +1,7 @@
 import { randomInt } from "node:crypto";
 
 import { resolveVkInboundReplyToId } from "../../reply-to.js";
+import { formatVkOutboundMessage } from "../../text-format.js";
 import { sendVkMessage, setVkMessageActivity } from "../core/api.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import type { VkInboundMessage } from "../types/longpoll.js";
@@ -121,8 +122,8 @@ export async function sendVkText(
     throw new Error(options.account.tokenError ?? "VK token is not configured");
   }
 
-  const text = options.text.trim();
-  if (!text) {
+  const formatted = formatVkOutboundMessage(options.text);
+  if (!formatted.text) {
     throw new Error("VK text message must not be empty");
   }
 
@@ -135,7 +136,8 @@ export async function sendVkText(
   const messageId = await sendVkMessage({
     token: options.account.token,
     peerId,
-    message: text,
+    message: formatted.text,
+    formatData: formatted.formatData,
     keyboard: options.keyboard,
     randomId,
     replyTo,

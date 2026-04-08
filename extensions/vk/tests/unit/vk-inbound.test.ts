@@ -302,6 +302,70 @@ describe("vk inbound handling", () => {
     expect(ctxPayload.WasMentioned).toBe(true);
   });
 
+  it("routes slash commands in groups without a mention", async () => {
+    setVkRuntime({
+      ...createRuntimeMock(),
+      channel: {
+        ...createRuntimeMock().channel,
+        commands: {
+          shouldComputeCommandAuthorized: vi.fn(() => true),
+          resolveCommandAuthorizedFromAuthorizers: vi.fn(() => false),
+        },
+      },
+    } as never);
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          groupPolicy: "open",
+          groups: {
+            "2000000123": {
+              requireMention: true,
+            },
+          },
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+    const accessController = createVkAccessController();
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      accessController,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:group-command-no-mention",
+        messageId: "778",
+        peerId: 2000000123,
+        senderId: 42,
+        text: "/models",
+        createdAt: 1700000100000,
+        isGroupChat: true,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundReplyWithBaseMock).toHaveBeenCalledTimes(1);
+    const params = dispatchInboundReplyWithBaseMock.mock.calls[0]?.[0] as
+      | { ctxPayload?: Record<string, unknown> }
+      | undefined;
+    expect(params?.ctxPayload?.CommandBody).toBe("/models");
+    expect(params?.ctxPayload?.RawBody).toBe("/models");
+    const ctxPayload = dispatchInboundReplyWithBaseMock.mock.calls[0]?.[0]?.ctxPayload as Record<
+      string,
+      unknown
+    >;
+    expect(ctxPayload.WasMentioned).toBe(false);
+  });
+
   it("omits VK group reply_to when only a global message id is available", async () => {
     const cfg: OpenClawConfig = {
       channels: {

@@ -9,6 +9,7 @@ import type {
 } from "../types/access.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import type { VkInboundMessage } from "../types/longpoll.js";
+import { isVkSlashCommandMessage } from "../../text-format.js";
 
 type VkAccountAccessState = {
   approvals: Map<number, VkPairingApproval>;
@@ -228,7 +229,11 @@ export function createVkAccessController(
         };
       }
 
-      if (groupConfig?.requireMention && !mentioned) {
+      if (
+        groupConfig?.requireMention &&
+        !mentioned &&
+        !isVkSlashCommandMessage(params.message)
+      ) {
         return {
           decision: "deny",
           reason: "group-mention-required",

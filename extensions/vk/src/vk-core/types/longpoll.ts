@@ -1,4 +1,5 @@
 import type { ResolvedVkAccount } from "./config.js";
+import type { VkFormatData } from "./format.js";
 
 export type VkLongPollServer = {
   key: string;
@@ -24,6 +25,7 @@ export type VkInboundMessage = {
   peerId: number;
   senderId: number;
   text: string;
+  formatData?: VkFormatData;
   messagePayload?: unknown;
   createdAt: number;
   isGroupChat: boolean;

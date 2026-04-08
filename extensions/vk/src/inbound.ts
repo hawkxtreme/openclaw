@@ -5,10 +5,10 @@ import { resolveInboundDirectDmAccessWithRuntime } from "openclaw/plugin-sdk/dir
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/core";
 import type { ResolvedVkAccount } from "./accounts.js";
-import { resolveVkCommandFromPayload } from "./keyboard.js";
 import { vkOutboundAdapter } from "./outbound.js";
 import { resolveVkInboundReplyToId } from "./reply-to.js";
 import { getVkRuntime } from "./runtime.js";
+import { resolveVkInboundBody } from "./text-format.js";
 import { sendVkText, sendVkTyping } from "./vk-core/outbound/send.js";
 import type { VkAccessController } from "./vk-core/types/access.js";
 import type { VkInboundMessage } from "./vk-core/types/longpoll.js";
@@ -92,6 +92,9 @@ function resolveVkGroupCommandAuthorization(params: {
   }
 
   const ownerAllowFrom = params.account.config.allowFrom ?? [];
+  if (ownerAllowFrom.length === 0 && params.groupAllowFrom.length === 0) {
+    return true;
+  }
   return params.runtime.channel.commands.resolveCommandAuthorizedFromAuthorizers({
     useAccessGroups: params.cfg.commands?.useAccessGroups !== false,
     authorizers: [
@@ -172,8 +175,7 @@ export async function handleVkInboundMessage(params: {
   };
 
   traceInbound("start");
-  const visibleBody = message.text.trim();
-  const rawBody = resolveVkCommandFromPayload(message.messagePayload) ?? visibleBody;
+  const rawBody = resolveVkInboundBody(message);
   if (!rawBody) {
     log?.debug?.(
       `[${account.accountId}] skipping VK message ${message.messageId} without text content`,

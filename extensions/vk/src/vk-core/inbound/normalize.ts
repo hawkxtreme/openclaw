@@ -1,4 +1,5 @@
 import type { VkInboundMessage } from "../types/longpoll.js";
+import { parseVkFormatData } from "../types/format.js";
 
 const VK_GROUP_CHAT_PEER_ID_MIN = 2_000_000_000;
 
@@ -128,6 +129,7 @@ export function normalizeVkMessageNewUpdate(params: {
   const conversationMessageId = toOptionalString(
     message.conversation_message_id,
   );
+  const formatData = parseVkFormatData(message.format_data);
   const messagePayload = parsePayload(message.payload ?? message.message_payload);
 
   return {
@@ -149,6 +151,7 @@ export function normalizeVkMessageNewUpdate(params: {
     peerId,
     senderId,
     text,
+    formatData,
     messagePayload,
     createdAt,
     isGroupChat: peerId >= VK_GROUP_CHAT_PEER_ID_MIN,

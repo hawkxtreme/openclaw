@@ -15,10 +15,15 @@ export function resolveVkInboundReplyToId(
     return undefined;
   }
 
+  const messageId = normalizeVkReplyToId(message.messageId);
+  if (messageId) {
+    return messageId;
+  }
+
   const conversationMessageId = normalizeVkReplyToId(message.conversationMessageId);
   if (conversationMessageId) {
     return conversationMessageId;
   }
 
-  return normalizeVkReplyToId(message.messageId);
+  return undefined;
 }

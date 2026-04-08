@@ -2,6 +2,7 @@ import {
   DEFAULT_VK_API_VERSION,
   type VkGroupSummary,
 } from "../types/config.js";
+import type { VkFormatData } from "../types/format.js";
 import type {
   VkLongPollResponse,
   VkLongPollServer,
@@ -177,6 +178,7 @@ export async function sendVkMessage(params: {
   token: string;
   peerId: number;
   message?: string;
+  formatData?: VkFormatData;
   attachment?: string;
   keyboard?: string;
   randomId: number;
@@ -194,6 +196,9 @@ export async function sendVkMessage(params: {
     query: {
       peer_id: params.peerId,
       message: params.message,
+      format_data: params.formatData
+        ? JSON.stringify(params.formatData)
+        : undefined,
       attachment: params.attachment,
       keyboard: params.keyboard,
       random_id: params.randomId,

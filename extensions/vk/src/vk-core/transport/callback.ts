@@ -162,6 +162,19 @@ export function createVkCallbackHandler(
     }
 
     const eventType = toOptionalString(envelope.type) ?? "unknown";
+    if (eventType === "confirmation") {
+      tracer?.record("webhook.confirmation", {
+        accountId: account.accountId,
+        groupId,
+      });
+      return {
+        statusCode: 200,
+        body: account.config.callback.confirmationCode ?? "",
+        eventType: "confirmation",
+        accountId: account.accountId,
+      };
+    }
+
     const providedSecret = toOptionalString(envelope.secret);
     const expectedSecret = account.config.callback.secret?.trim();
     if (expectedSecret && providedSecret !== expectedSecret) {
@@ -173,19 +186,6 @@ export function createVkCallbackHandler(
         statusCode: 401,
         body: "invalid secret",
         eventType: "rejected",
-        accountId: account.accountId,
-      };
-    }
-
-    if (eventType === "confirmation") {
-      tracer?.record("webhook.confirmation", {
-        accountId: account.accountId,
-        groupId,
-      });
-      return {
-        statusCode: 200,
-        body: account.config.callback.confirmationCode ?? "",
-        eventType: "confirmation",
         accountId: account.accountId,
       };
     }

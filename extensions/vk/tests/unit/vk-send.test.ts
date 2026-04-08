@@ -102,6 +102,52 @@ describe("vk outbound text", () => {
     );
   });
 
+  it("renders markdown text as readable plain VK text", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+
+    await sendVkText({
+      account,
+      peerId: 42,
+      text: `*Italic* **Bold**
+
+> Quote
+
+| Name | Value |
+| --- | --- |
+| Row1 | A |
+
+[OpenClaw](https://openclaw.ai)`,
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9105,
+          }),
+        );
+      },
+    });
+
+    const message = requestedUrl?.searchParams.get("message") ?? "";
+    expect(message).toContain("Italic");
+    expect(message).toContain("Bold");
+    expect(message).toContain("> Quote");
+    expect(message).toContain("Name: Row1, Value: A");
+    expect(message).toContain("OpenClaw (https://openclaw.ai)");
+    expect(message).not.toContain("| --- | --- |");
+    expect(message).not.toContain("[I]Italic[/I]");
+    expect(message).not.toContain("[B]Bold[/B]");
+    expect(requestedUrl?.searchParams.get("format_data")).toBe(
+      JSON.stringify({
+        version: "1",
+        items: [
+          { offset: message.indexOf("Italic"), length: 6, type: "italic" },
+          { offset: message.indexOf("Bold"), length: 4, type: "bold" },
+        ],
+      }),
+    );
+  });
+
   it("builds reply sends from normalized inbound VK messages", async () => {
     const account = createAccount();
     let requestedUrl: URL | undefined;
@@ -143,6 +189,45 @@ describe("vk outbound text", () => {
     expect(result.messageId).toBe("9100");
     expect(requestedUrl?.searchParams.get("peer_id")).toBe("42");
     expect(requestedUrl?.searchParams.get("reply_to")).toBe("501");
+  });
+
+  it("preserves inbound VK format_data when present on a message_new update", () => {
+    const inbound = normalizeVkMessageNewUpdate({
+      accountId: "default",
+      groupId: 77,
+      update: {
+        type: "message_new",
+        group_id: 77,
+        event_id: "evt-format-1",
+        object: {
+          message: {
+            id: 777,
+            peer_id: 42,
+            from_id: 42,
+            text: "Italic Bold",
+            format_data: {
+              version: "1",
+              items: [
+                { offset: 0, length: 6, type: "italic" },
+                { offset: 7, length: 4, type: "bold" },
+              ],
+            },
+            date: 1_700_000_000,
+          },
+        },
+      },
+    });
+
+    expect(inbound).toMatchObject({
+      text: "Italic Bold",
+      formatData: {
+        version: "1",
+        items: [
+          { offset: 0, length: 6, type: "italic" },
+          { offset: 7, length: 4, type: "bold" },
+        ],
+      },
+    });
   });
 
   it("does not fall back to a group message global id for reply_to", async () => {
@@ -216,6 +301,43 @@ describe("vk outbound text", () => {
 
     expect(requestedUrl?.searchParams.get("peer_id")).toBe("2000000001");
     expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
+  });
+
+  it("prefers the DM message id over conversation_message_id for reply_to", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+    const inbound = {
+      accountId: account.accountId,
+      groupId: 77,
+      transport: "callback-api",
+      eventType: "message_new",
+      dedupeKey: "event:dm-callback-1",
+      messageId: "93",
+      conversationMessageId: "68",
+      peerId: 42,
+      senderId: 42,
+      text: "/commands",
+      createdAt: 1_700_000_000_000,
+      isGroupChat: false,
+      rawUpdate: {},
+    } as const;
+
+    await sendVkReply({
+      account,
+      message: inbound,
+      text: "Reply text",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9103,
+          }),
+        );
+      },
+    });
+
+    expect(requestedUrl?.searchParams.get("peer_id")).toBe("42");
+    expect(requestedUrl?.searchParams.get("reply_to")).toBe("93");
   });
 
   it("fails fast on missing token or invalid peer ids", async () => {

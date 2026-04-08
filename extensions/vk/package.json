@@ -31,7 +31,7 @@
       "systemImage": "message",
       "order": 76,
       "quickstartAllowFrom": true,
-      "markdownCapable": true
+      "markdownCapable": false
     },
     "install": {
       "npmSpec": "@openclaw/vk",

@@ -16,6 +16,7 @@ import {
   sendVkMessage,
   uploadVkMultipart,
 } from "../core/api.js";
+import { formatVkOutboundMessage } from "../../text-format.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import { normalizeVkPeerId, resolveVkRandomId } from "./send.js";
 
@@ -646,8 +647,10 @@ export async function sendVkPayload(
     attachments.push(uploaded.attachment);
   }
 
-  const text = options.text?.trim();
-  if (!text && attachments.length === 0) {
+  const formatted = options.text
+    ? formatVkOutboundMessage(options.text)
+    : undefined;
+  if (!formatted?.text && attachments.length === 0) {
     throw new Error("VK payload requires text or media");
   }
 
@@ -658,7 +661,8 @@ export async function sendVkPayload(
   const messageId = await sendVkMessage({
     token: options.account.token,
     peerId,
-    message: text,
+    message: formatted?.text,
+    formatData: formatted?.formatData,
     attachment: attachments.length > 0 ? attachments.join(",") : undefined,
     keyboard: options.keyboard,
     randomId,

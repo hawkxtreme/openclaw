@@ -444,4 +444,50 @@ describe("vk access controller", () => {
       wasMentioned: true,
     });
   });
+
+  it("allows slash commands in groups without a mention when mention is required", () => {
+    const controller = createVkAccessController();
+    const account = createAccount({
+      config: {
+        groupId: 77,
+        accessToken: "replace-me-group-command-token",
+        groupPolicy: "open",
+        groups: {
+          "*": {
+            requireMention: true,
+          },
+        },
+      },
+    });
+    const slashCommand = normalizeVkMessageNewUpdate({
+      accountId: "default",
+      groupId: 77,
+      update: {
+        type: "message_new",
+        group_id: 77,
+        event_id: "evt-group-command-1",
+        object: {
+          message: {
+            id: 777,
+            peer_id: 2_000_000_123,
+            from_id: 42,
+            text: "/models",
+            date: 1_700_000_000,
+          },
+        },
+      },
+    });
+
+    expect(slashCommand).not.toBeNull();
+    expect(
+      controller.evaluateMessage({
+        account,
+        message: slashCommand!,
+      }),
+    ).toMatchObject({
+      decision: "allow",
+      reason: "group-open",
+      wasMentioned: false,
+    });
+  });
 });
