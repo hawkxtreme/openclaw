@@ -19,6 +19,7 @@ import {
   resolveManifestContractPluginIds,
   type PluginManifestRecord,
 } from "./manifest-registry.js";
+import { resolveGatewayBindableActiveRegistry } from "./runtime-registry-reuse.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { PluginWebSearchProviderEntry } from "./types.js";
 import {
@@ -234,6 +235,10 @@ export function resolvePluginWebSearchProviders(params: {
   // re-import the same plugin set through the snapshot path.
   const resolved = mapRegistryWebSearchProviders({
     registry:
+      resolveGatewayBindableActiveRegistry({
+        workspaceDir,
+        requiredPluginIds: loadOptions.onlyPluginIds,
+      }) ??
       resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
@@ -267,17 +272,25 @@ export function resolveRuntimeWebSearchProviders(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): PluginWebSearchProviderEntry[] {
-  const runtimeRegistry = resolveRuntimePluginRegistry(
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const loadOptions =
     params.config === undefined
       ? undefined
       : resolveWebSearchLoadOptions({
           ...params,
-          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDir(),
-        }),
-  );
-  if (runtimeRegistry) {
+          workspaceDir,
+        });
+  const gatewayBindableRegistry =
+    loadOptions === undefined
+      ? resolveGatewayBindableActiveRegistry({ workspaceDir })
+      : resolveGatewayBindableActiveRegistry({
+          workspaceDir,
+          requiredPluginIds: loadOptions.onlyPluginIds,
+        });
+  const registry = gatewayBindableRegistry ?? resolveRuntimePluginRegistry(loadOptions);
+  if (registry) {
     return mapRegistryWebSearchProviders({
-      registry: runtimeRegistry,
+      registry,
       onlyPluginIds: params.onlyPluginIds,
     });
   }

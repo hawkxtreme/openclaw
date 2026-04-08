@@ -506,3 +506,41 @@ corepack pnpm vitest run --config vitest.extensions.config.ts
   - `ensureRuntimePluginsLoaded(...)`
   - the embedded attempt path around session/MCP/docs/bootstrap work before prompt execution
   - post-run reply finalization after `runAgentTurnWithFallback(...)`
+
+## 2026-04-08 Gateway-bindable runtime registry reuse
+
+- Added env-gated compatibility trace in `src/plugins/loader.ts` for
+  `getCompatibleActivePluginRegistry(...)` so synthetic replays could show exactly why scoped
+  runtime loads were missing active-registry reuse.
+- That trace showed a narrow and actionable pattern after the first full runtime load:
+  several later scoped runtime reads were missing reuse only because they requested
+  `requestedRuntimeMode=default` while the already-loaded active registry was
+  `activeRuntimeMode=gateway-bindable`, even though they were running against the same workspace
+  and the active registry already contained the required plugin ids.
+- Implemented `src/plugins/runtime-registry-reuse.ts` with a guarded helper that reuses the active
+  registry only when all of the following are true:
+  - the active registry exists and has a cache key
+  - the active runtime mode is `gateway-bindable`
+  - the requested workspace matches the active workspace
+  - every required plugin id is already loaded in the active registry
+- Wired that helper into:
+  - `src/plugins/providers.runtime.ts`
+  - `src/plugins/web-search-providers.runtime.ts`
+  - `src/plugins/web-fetch-providers.runtime.ts`
+- Regression coverage added in:
+  - `src/plugins/providers.test.ts`
+  - `src/plugins/web-search-providers.runtime.test.ts`
+  - `src/plugins/web-fetch-providers.runtime.test.ts`
+- Validation:
+  - `corepack pnpm test src/plugins/providers.test.ts src/plugins/web-search-providers.runtime.test.ts src/plugins/web-fetch-providers.runtime.test.ts`
+  - `corepack pnpm exec tsdown --config-loader unrun --logLevel warn`
+- Synthetic replay result after this fix:
+  - old repeated scoped `cache-key-mismatch` reloads mostly disappeared
+  - `handle-ok` dropped further to about `60.0s`
+  - the replay now shows one remaining scoped mismatch:
+    `requestedOnlyPluginIds=12`, still with `requestedRuntimeMode=default` versus
+    `activeRuntimeMode=gateway-bindable`
+- Practical conclusion:
+  the large gateway-bindable reuse gap is mostly closed. The next bounded seam is now a single
+  remaining scoped runtime read near web search / web fetch tool enablement, not a broad plugin
+  loader problem anymore.

@@ -88,6 +88,13 @@ function createRuntimeWebFetchProvider() {
   };
 }
 
+function markRegistryPluginLoaded(registry: ReturnType<typeof createEmptyPluginRegistry>, id: string) {
+  registry.plugins.push({
+    id,
+    status: "loaded",
+  } as never);
+}
+
 describe("resolvePluginWebFetchProviders", () => {
   beforeAll(async () => {
     loaderModule = await import("./loader.js");
@@ -196,6 +203,27 @@ describe("resolvePluginWebFetchProviders", () => {
     const providers = resolvePluginWebFetchProviders({
       config: rawConfig,
       bundledAllowlistCompat: true,
+      env,
+    });
+
+    expect(providers.map((provider) => `${provider.pluginId}:${provider.id}`)).toEqual([
+      "firecrawl:firecrawl",
+    ]);
+    expect(loadOpenClawPluginsMock).not.toHaveBeenCalled();
+  });
+
+  it("reuses a gateway-bindable active registry for snapshot resolution when it already contains the requested plugin", () => {
+    const env = createWebFetchEnv();
+    const rawConfig = createFirecrawlAllowConfig();
+    const registry = createEmptyPluginRegistry();
+    markRegistryPluginLoaded(registry, "firecrawl");
+    registry.webFetchProviders.push(createRuntimeWebFetchProvider());
+    setActivePluginRegistry(registry, "gateway-runtime", "gateway-bindable", DEFAULT_WORKSPACE);
+
+    const providers = resolvePluginWebFetchProviders({
+      config: rawConfig,
+      bundledAllowlistCompat: true,
+      workspaceDir: DEFAULT_WORKSPACE,
       env,
     });
 

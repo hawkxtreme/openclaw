@@ -19,6 +19,7 @@ import {
   resolveManifestContractPluginIds,
   type PluginManifestRecord,
 } from "./manifest-registry.js";
+import { resolveGatewayBindableActiveRegistry } from "./runtime-registry-reuse.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { PluginWebFetchProviderEntry } from "./types.js";
 import {
@@ -235,6 +236,10 @@ export function resolvePluginWebFetchProviders(params: {
   // possible, then fall back to a fresh snapshot load only when necessary.
   const resolved = mapRegistryWebFetchProviders({
     registry:
+      resolveGatewayBindableActiveRegistry({
+        workspaceDir,
+        requiredPluginIds: loadOptions.onlyPluginIds,
+      }) ??
       resolveCompatibleRuntimePluginRegistry(loadOptions) ?? loadOpenClawPlugins(loadOptions),
   });
   if (cacheOwnerConfig && shouldMemoizeSnapshot) {
@@ -268,17 +273,25 @@ export function resolveRuntimeWebFetchProviders(params: {
   onlyPluginIds?: readonly string[];
   origin?: PluginManifestRecord["origin"];
 }): PluginWebFetchProviderEntry[] {
-  const runtimeRegistry = resolveRuntimePluginRegistry(
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDir();
+  const loadOptions =
     params.config === undefined
       ? undefined
       : resolveWebFetchLoadOptions({
           ...params,
-          workspaceDir: params.workspaceDir ?? getActivePluginRegistryWorkspaceDir(),
-        }),
-  );
-  if (runtimeRegistry) {
+          workspaceDir,
+        });
+  const gatewayBindableRegistry =
+    loadOptions === undefined
+      ? resolveGatewayBindableActiveRegistry({ workspaceDir })
+      : resolveGatewayBindableActiveRegistry({
+          workspaceDir,
+          requiredPluginIds: loadOptions.onlyPluginIds,
+        });
+  const registry = gatewayBindableRegistry ?? resolveRuntimePluginRegistry(loadOptions);
+  if (registry) {
     return mapRegistryWebFetchProviders({
-      registry: runtimeRegistry,
+      registry,
       onlyPluginIds: params.onlyPluginIds,
     });
   }

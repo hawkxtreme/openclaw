@@ -49,6 +49,8 @@ import { resolvePluginCacheInputs } from "./roots.js";
 import {
   getActivePluginRegistry,
   getActivePluginRegistryKey,
+  getActivePluginRegistryWorkspaceDir,
+  getActivePluginRuntimeSubagentMode,
   recordImportedPluginId,
   setActivePluginRegistry,
 } from "./runtime.js";
@@ -431,20 +433,48 @@ function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
 function getCompatibleActivePluginRegistry(
   options: PluginLoadOptions = {},
 ): PluginRegistry | undefined {
+  const traceCompatibility = (step: string, extra?: Record<string, string | number | boolean>) => {
+    if (process.env.OPENCLAW_DEBUG_INGRESS_TIMING !== "1") {
+      return;
+    }
+    const renderedExtra =
+      extra && Object.keys(extra).length > 0
+        ? ` ${Object.entries(extra)
+            .map(([key, value]) => `${key}=${String(value)}`)
+            .join(" ")}`
+        : "";
+    console.warn(`[plugin-registry-compat] ${step}${renderedExtra}`);
+  };
   const activeRegistry = getActivePluginRegistry() ?? undefined;
   if (!activeRegistry) {
+    traceCompatibility("miss", { reason: "no-active-registry" });
     return undefined;
   }
   if (!hasExplicitCompatibilityInputs(options)) {
+    traceCompatibility("hit", {
+      reason: "implicit-active-registry",
+      activePlugins: activeRegistry.plugins.length,
+    });
     return activeRegistry;
   }
   const activeCacheKey = getActivePluginRegistryKey();
   if (!activeCacheKey) {
+    traceCompatibility("miss", { reason: "missing-active-cache-key" });
     return undefined;
   }
-  return resolvePluginLoadCacheContext(options).cacheKey === activeCacheKey
-    ? activeRegistry
-    : undefined;
+  const requestedContext = resolvePluginLoadCacheContext(options);
+  const requestedCacheKey = requestedContext.cacheKey;
+  const isMatch = requestedCacheKey === activeCacheKey;
+  traceCompatibility(isMatch ? "hit" : "miss", {
+    reason: isMatch ? "cache-key-match" : "cache-key-mismatch",
+    requestedWorkspaceDir: options.workspaceDir ?? "",
+    activeWorkspaceDir: getActivePluginRegistryWorkspaceDir() ?? "",
+    requestedRuntimeMode: requestedContext.runtimeSubagentMode,
+    activeRuntimeMode: getActivePluginRuntimeSubagentMode(),
+    requestedOnlyPluginIds: requestedContext.onlyPluginIds?.length ?? 0,
+    activePlugins: activeRegistry.plugins.length,
+  });
+  return isMatch ? activeRegistry : undefined;
 }
 
 export function resolveRuntimePluginRegistry(

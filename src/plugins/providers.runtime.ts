@@ -15,6 +15,7 @@ import {
   resolveOwningPluginIdsForModelRefs,
   withBundledProviderVitestCompat,
 } from "./providers.js";
+import { resolveGatewayBindableActiveRegistry } from "./runtime-registry-reuse.js";
 import { getActivePluginRegistryWorkspaceDir } from "./runtime.js";
 import type { ProviderPlugin } from "./types.js";
 
@@ -133,18 +134,26 @@ export function resolvePluginProviders(params: {
     env,
     onlyPluginIds: requestedPluginIds,
   });
-  const registry = resolveRuntimePluginRegistry({
-    config,
-    activationSourceConfig: activation.activationSourceConfig,
-    autoEnabledReasons: activation.autoEnabledReasons,
-    workspaceDir,
-    env,
-    onlyPluginIds: providerPluginIds,
-    pluginSdkResolution: params.pluginSdkResolution,
-    cache: params.cache ?? false,
-    activate: params.activate ?? false,
-    logger: createPluginLoaderLogger(log),
-  });
+  if (providerPluginIds.length === 0) {
+    return [];
+  }
+  const registry =
+    resolveGatewayBindableActiveRegistry({
+      workspaceDir,
+      requiredPluginIds: providerPluginIds,
+    }) ??
+    resolveRuntimePluginRegistry({
+      config,
+      activationSourceConfig: activation.activationSourceConfig,
+      autoEnabledReasons: activation.autoEnabledReasons,
+      workspaceDir,
+      env,
+      onlyPluginIds: providerPluginIds,
+      pluginSdkResolution: params.pluginSdkResolution,
+      cache: params.cache ?? false,
+      activate: params.activate ?? false,
+      logger: createPluginLoaderLogger(log),
+    });
   if (!registry) {
     return [];
   }

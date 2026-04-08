@@ -120,6 +120,13 @@ function expectResolvedProviders(providers: unknown, expected: unknown[]) {
   expect(providers).toEqual(expected);
 }
 
+function markRegistryPluginLoaded(registry: ReturnType<typeof createEmptyPluginRegistry>, id: string) {
+  registry.plugins.push({
+    id,
+    status: "loaded",
+  } as never);
+}
+
 function expectLastRuntimeRegistryLoad(params?: {
   env?: NodeJS.ProcessEnv;
   onlyPluginIds?: readonly string[];
@@ -563,6 +570,33 @@ describe("resolvePluginProviders", () => {
     );
   });
 
+  it("reuses a gateway-bindable active registry when it already contains the requested provider plugin", () => {
+    const provider: ProviderPlugin = {
+      id: "demo-provider",
+      label: "Demo Provider",
+      auth: [],
+    };
+    const registry = createEmptyPluginRegistry();
+    markRegistryPluginLoaded(registry, "google");
+    registry.providers.push({ pluginId: "google", provider, source: "bundled" });
+    setActivePluginRegistry(registry, "gateway-runtime", "gateway-bindable", "/workspace/runtime");
+
+    const providers = resolvePluginProviders({
+      config: {
+        plugins: {
+          allow: ["google"],
+        },
+      },
+      onlyPluginIds: ["google"],
+      workspaceDir: "/workspace/runtime",
+    });
+
+    expectResolvedProviders(providers, [
+      { id: "demo-provider", label: "Demo Provider", auth: [], pluginId: "google" },
+    ]);
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
+  });
+
   it("inherits workspaceDir from the active registry when provider resolution omits it", () => {
     setActivePluginRegistry(
       createEmptyPluginRegistry(),
@@ -611,6 +645,19 @@ describe("resolvePluginProviders", () => {
         }),
       }),
     );
+  });
+  it("does not fall back to the full runtime registry for explicit provider refs with no owner", () => {
+    setOwningProviderManifestPlugins();
+    resolveRuntimePluginRegistryMock.mockClear();
+
+    expect(
+      resolvePluginProviders({
+        config: {},
+        providerRefs: ["gemini-cli"],
+      }),
+    ).toEqual([]);
+
+    expect(resolveRuntimePluginRegistryMock).not.toHaveBeenCalled();
   });
   it.each([
     {
