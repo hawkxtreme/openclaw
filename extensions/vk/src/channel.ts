@@ -13,6 +13,7 @@ import {
 import { vkGatewayAdapter } from "./gateway.js";
 import { resolveVkGroupRequireMention } from "./group-policy.js";
 import { vkMessagingAdapter, vkOutboundAdapter } from "./outbound.js";
+import { collectRuntimeConfigAssignments, secretTargetRegistryEntries } from "./secret-contract.js";
 import { vkSetupAdapter } from "./setup-core.js";
 import { sendVkText } from "./vk-core/outbound/send.js";
 import type { VkProbeResult } from "./vk-core/types/config.js";
@@ -33,6 +34,10 @@ export const vkPlugin: ChannelPlugin<ResolvedVkAccount, VkProbeResult> = createC
     },
     groups: {
       resolveRequireMention: resolveVkGroupRequireMention,
+    },
+    secrets: {
+      secretTargetRegistryEntries,
+      collectRuntimeConfigAssignments,
     },
     gateway: vkGatewayAdapter,
     agentPrompt: {

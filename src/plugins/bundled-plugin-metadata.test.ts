@@ -100,6 +100,13 @@ describe("bundled plugin metadata", () => {
     );
   });
 
+  it("captures VK contract public surface artifacts", () => {
+    const vk = listBundledPluginMetadata().find((entry) => entry.dirName === "vk");
+    expectArtifactPresence(vk?.publicSurfaceArtifacts, {
+      contains: ["api.js", "contract-api.js", "runtime-api.js"],
+    });
+  });
+
   it("keeps bundled persisted-auth metadata on channel package manifests", () => {
     const whatsapp = listBundledPluginMetadata().find((entry) => entry.dirName === "whatsapp");
     expect(whatsapp?.packageManifest?.channel?.persistedAuthState).toEqual({
