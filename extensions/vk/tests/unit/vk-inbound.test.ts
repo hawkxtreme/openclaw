@@ -376,11 +376,17 @@ describe("vk inbound handling", () => {
       },
     });
 
-    expect(requestedUrls).toHaveLength(0);
-    expect(dispatchInboundDirectDmWithRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
-      rawBody: "/commands",
-    });
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK uses buttons for command menus. Choose a command:",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
+    expect(keyboard.buttons).toHaveLength(5);
+    expect(keyboard.buttons[0][0].action.label).toBe("Menu");
+    expect(keyboard.buttons[0][1].action.label).toBe("Help");
+    expect(keyboard.buttons[4][0].action.label).toBe("Close");
   });
 
   it("returns narrowed VK button suggestions for slash prefixes in DMs", async () => {
@@ -447,7 +453,7 @@ describe("vk inbound handling", () => {
       "VK uses buttons for command menus. Matching commands:",
     );
     const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
-    expect(keyboard.one_time).toBe(true);
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
     expect(keyboard.buttons).toHaveLength(2);
     expect(keyboard.buttons[0][0].action.label).toBe("Model");
     expect(keyboard.buttons[0][1].action.label).toBe("Models");
@@ -518,7 +524,7 @@ describe("vk inbound handling", () => {
       "VK uses buttons for command menus. Matching commands:",
     );
     const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
-    expect(keyboard.one_time).toBe(true);
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
     expect(keyboard.buttons).toHaveLength(2);
     expect(keyboard.buttons[0][0].action.label).toBe("Status");
     expect(keyboard.buttons[0][1].action.label).toBe("Stop");
@@ -541,6 +547,7 @@ describe("vk inbound handling", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           dmPolicy: "allowlist",
           allowFrom: ["42"],
@@ -551,6 +558,32 @@ describe("vk inbound handling", () => {
       cfg,
       accountId: "default",
     });
+
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+
+        if (url.pathname === "/method/messages.getHistory") {
+          return new Response(
+            JSON.stringify({
+              response: {
+                count: 0,
+                items: [],
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 9504,
+          }),
+        );
+      }),
+    );
 
     await handleVkInboundMessage({
       cfg,
@@ -571,10 +604,15 @@ describe("vk inbound handling", () => {
       },
     });
 
-    expect(dispatchInboundDirectDmWithRuntimeMock).toHaveBeenCalledTimes(1);
-    expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
-      rawBody: "/commands",
-    });
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK uses buttons for command menus. Choose a command:",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.buttons[0][0].action.label).toBe("Menu");
+    expect(keyboard.buttons[0][1].action.label).toBe("Help");
+    expect(keyboard.buttons[4][0].action.label).toBe("Close");
   });
 
   it("closes an active DM menu without dispatching to the shared command runtime", async () => {
@@ -647,7 +685,6 @@ describe("vk inbound handling", () => {
     expect(editUrl?.searchParams.get("message")).toBe("Menu hidden. Tap Menu to reopen.");
     expect(JSON.parse(editUrl?.searchParams.get("keyboard") ?? "{}")).toEqual({
       inline: true,
-      one_time: false,
       buttons: [
         [
           {
@@ -1080,7 +1117,6 @@ describe("vk inbound handling", () => {
     expect(editUrl?.searchParams.get("message")).toBe("All systems nominal.");
     expect(JSON.parse(editUrl?.searchParams.get("keyboard") ?? "{}")).toEqual({
       inline: true,
-      one_time: false,
       buttons: [
         [
           {

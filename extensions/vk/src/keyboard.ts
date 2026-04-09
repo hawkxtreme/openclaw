@@ -238,7 +238,7 @@ export function buildVkKeyboard(
   return rows.length > 0
     ? JSON.stringify({
         ...(useInlineCallback ? { inline: true } : {}),
-        one_time: spec.oneTime ?? false,
+        ...(!useInlineCallback ? { one_time: spec.oneTime ?? false } : {}),
         buttons: rows,
       })
     : undefined;

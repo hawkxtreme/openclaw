@@ -27,6 +27,7 @@ export const VK_CLOSE_MENU_COMMAND = "/vk-menu-close";
 const MODELS_PAGE_SIZE = 6;
 const PROVIDERS_PAGE_SIZE = 8;
 const TOOLS_PAGE_SIZE = 6;
+const MAX_INLINE_CALLBACK_BUTTONS = 10;
 const TOOLS_PER_ROW = 2;
 const TOOL_GROUPS_PER_ROW = 2;
 const PROVIDERS_PER_ROW = 2;
@@ -201,17 +202,30 @@ export function buildVkModelsProviderChannelData(params: {
   if (params.providers.length === 0) {
     return null;
   }
+  const currentPage = Math.max(1, params.currentPage ?? 1);
+  const totalPages = Math.max(currentPage, params.totalPages ?? currentPage);
+  // Live VK callback keyboards reject middle provider pages with 11 buttons
+  // (8 providers + Prev + Next + Close). Reserve room for navigation/close.
+  const reservedControlButtons =
+    (currentPage > 1 ? 1 : 0) +
+    (currentPage < totalPages ? 1 : 0) +
+    1;
+  const providerButtonLimit = Math.max(
+    1,
+    Math.min(
+      PROVIDERS_PAGE_SIZE,
+      MAX_INLINE_CALLBACK_BUTTONS - reservedControlButtons,
+    ),
+  );
   const rows = chunkButtons(
-    params.providers.map((provider) => ({
+    params.providers.slice(0, providerButtonLimit).map((provider) => ({
       text: `${provider.id} (${provider.count})`,
       callback_data: `/models ${provider.id}`,
     })),
     PROVIDERS_PER_ROW,
-  ).slice(0, Math.ceil(PROVIDERS_PAGE_SIZE / PROVIDERS_PER_ROW));
+  );
 
-  if ((params.totalPages ?? 1) > 1) {
-    const currentPage = Math.max(1, params.currentPage ?? 1);
-    const totalPages = Math.max(currentPage, params.totalPages ?? currentPage);
+  if (totalPages > 1) {
     const pagination: VkReplyButton[] = [];
     if (currentPage > 1) {
       pagination.push({
@@ -450,7 +464,7 @@ export function resolveVkSlashCommandSuggestionReply(
   }
 
   const matches =
-    normalized === "/"
+    normalized === "/" || normalized === "/commands"
       ? VK_PRIMARY_COMMAND_SUGGESTIONS
       : VK_COMMAND_SUGGESTIONS.filter((entry) =>
           entry.command.startsWith(normalized),
@@ -458,7 +472,11 @@ export function resolveVkSlashCommandSuggestionReply(
   if (matches.length === 0) {
     return null;
   }
-  if (normalized !== "/" && matches.some((entry) => entry.command === normalized)) {
+  if (
+    normalized !== "/" &&
+    normalized !== "/commands" &&
+    matches.some((entry) => entry.command === normalized)
+  ) {
     return null;
   }
 
@@ -483,7 +501,7 @@ export function resolveVkSlashCommandSuggestionReply(
 
   return {
     text:
-      normalized === "/"
+      normalized === "/" || normalized === "/commands"
         ? "VK uses buttons for command menus. Choose a command:"
         : "VK uses buttons for command menus. Matching commands:",
     channelData,

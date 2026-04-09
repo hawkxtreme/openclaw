@@ -1,8 +1,24 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { vkMessagingAdapter, vkOutboundAdapter, vkPlugin } from "../../api.js";
+import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
+import { createTestRegistry } from "../../../../src/test-utils/channel-plugins.js";
+import { handleModelsCommand } from "../../../../src/auto-reply/reply/commands-models.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
 
 describe("vk plugin adapters", () => {
+  beforeEach(() => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "vk",
+          plugin: vkPlugin,
+          source: "test",
+        },
+      ]),
+    );
+  });
+
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -255,7 +271,6 @@ describe("vk plugin adapters", () => {
       "huggingface (18)",
       "kimi (2)",
       "minimax (2)",
-      "minimax-cn (2)",
       "< Prev",
       "Next >",
       "Close",
@@ -396,6 +411,53 @@ describe("vk plugin adapters", () => {
     });
   });
 
+  it("preserves numeric provider pagination through the shared /models command flow", async () => {
+    const cfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "alpha/model-1" },
+          models: Object.fromEntries(
+            Array.from({ length: 19 }, (_, index) => [
+              `p${String(index + 1).padStart(2, "0")}/model-1`,
+              {},
+            ]),
+          ),
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      {
+        cfg,
+        ctx: {
+          Provider: "vk",
+          Surface: "vk",
+          CommandSource: "text",
+        },
+        command: {
+          commandBodyNormalized: "/models 2",
+          isAuthorizedSender: true,
+          senderId: "owner",
+        },
+        sessionKey: "agent:main:main",
+        provider: "alpha",
+        model: "model-1",
+      } as never,
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Select a provider (2/3):");
+    const buttons = (result?.reply?.channelData as {
+      vk?: { buttons?: Array<Array<{ text: string }>> };
+    })?.vk?.buttons;
+    expect(buttons?.flat().some((button) => button.text.includes("p07"))).toBe(false);
+    expect(buttons?.flat().some((button) => button.text.includes("p08"))).toBe(true);
+    expect(buttons?.flat().some((button) => button.text === "< Prev")).toBe(true);
+    expect(buttons?.flat().some((button) => button.text === "Next >")).toBe(true);
+  });
+
   it("sends command keyboards as inline callback buttons on callback-api accounts", async () => {
     const fetchMock = createVkApiFetchMock({
       sendResponse: 9006,
@@ -403,7 +465,7 @@ describe("vk plugin adapters", () => {
         if (url.pathname === "/method/messages.send") {
           const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
           expect(keyboard.inline).toBe(true);
-          expect(keyboard.one_time).toBe(true);
+          expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
           expect(keyboard.buttons[0][0].action.type).toBe("callback");
           expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
         }
