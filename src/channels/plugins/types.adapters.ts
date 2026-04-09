@@ -562,6 +562,22 @@ export type ChannelCommandAdapter = {
     modelNames?: ReadonlyMap<string, string>;
   }) => ReplyPayload["channelData"] | null;
   buildModelBrowseChannelData?: () => ReplyPayload["channelData"] | null;
+  buildToolsGroupListChannelData?: (params: {
+    groups: Array<{ id: string; label: string; count: number }>;
+    currentPage: number;
+    totalPages: number;
+  }) => ReplyPayload["channelData"] | null;
+  buildToolsListChannelData?: (params: {
+    groupId: string;
+    groupLabel: string;
+    tools: Array<{ id: string; label: string }>;
+    currentPage: number;
+    totalPages: number;
+  }) => ReplyPayload["channelData"] | null;
+  buildToolDetailsChannelData?: (params: {
+    groupId: string;
+    currentPage: number;
+  }) => ReplyPayload["channelData"] | null;
 };
 
 export type ChannelDoctorConfigMutation = {

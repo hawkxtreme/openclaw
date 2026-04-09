@@ -6,6 +6,17 @@ type ProviderInfo = {
   count: number;
 };
 
+type ToolGroupInfo = {
+  id: string;
+  label: string;
+  count: number;
+};
+
+type ToolInfo = {
+  id: string;
+  label: string;
+};
+
 type VkCommandSuggestion = {
   label: string;
   command: string;
@@ -15,6 +26,9 @@ export const VK_CLOSE_MENU_COMMAND = "/vk-menu-close";
 
 const MODELS_PAGE_SIZE = 6;
 const PROVIDERS_PAGE_SIZE = 8;
+const TOOLS_PAGE_SIZE = 6;
+const TOOLS_PER_ROW = 2;
+const TOOL_GROUPS_PER_ROW = 2;
 const PROVIDERS_PER_ROW = 2;
 const MODELS_PER_ROW = 2;
 const MAX_MODEL_LABEL_CHARS = 36;
@@ -112,6 +126,19 @@ function appendCloseRow(rows: VkReplyButton[][]): VkReplyButton[][] {
     ...rows,
     [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],
   ];
+}
+
+function shortenToolGroupLabel(label: string): string {
+  switch (label.trim().toLowerCase()) {
+    case "built-in tools":
+      return "Built-in";
+    case "connected tools":
+      return "Connected";
+    case "channel tools":
+      return "Channel";
+    default:
+      return label.trim();
+  }
 }
 
 function isCurrentModelSelection(params: {
@@ -280,6 +307,130 @@ export function buildVkModelBrowseChannelData(): ReplyPayload["channelData"] {
       ],
     },
   };
+}
+
+export function buildVkToolsGroupListChannelData(params: {
+  groups: ToolGroupInfo[];
+  currentPage: number;
+  totalPages: number;
+}): ReplyPayload["channelData"] | null {
+  if (params.groups.length === 0) {
+    return null;
+  }
+
+  const rows = chunkButtons(
+    params.groups.map((group) => ({
+      text: `${shortenToolGroupLabel(group.label)} (${group.count})`,
+      callback_data: `/tools ${group.id}`,
+    })),
+    TOOL_GROUPS_PER_ROW,
+  );
+
+  if (params.totalPages > 1) {
+    const pagination: VkReplyButton[] = [];
+    if (params.currentPage > 1) {
+      pagination.push({
+        text: "< Prev",
+        callback_data: `/tools ${params.currentPage - 1}`,
+      });
+    }
+    if (params.currentPage < params.totalPages) {
+      pagination.push({
+        text: "Next >",
+        callback_data: `/tools ${params.currentPage + 1}`,
+      });
+    }
+    if (pagination.length > 0) {
+      rows.push(pagination);
+    }
+  }
+
+  return toChannelData(appendCloseRow(rows), {
+    inline: true,
+    oneTime: true,
+  });
+}
+
+export function buildVkToolsListChannelData(params: {
+  groupId: string;
+  groupLabel: string;
+  tools: ToolInfo[];
+  currentPage: number;
+  totalPages: number;
+}): ReplyPayload["channelData"] | null {
+  if (params.tools.length === 0) {
+    return null;
+  }
+
+  const rows = chunkButtons(
+    params.tools.map((tool) => ({
+      text: truncateLabel(tool.label),
+      callback_data: `/tools ${params.groupId} ${tool.id}`,
+    })),
+    TOOLS_PER_ROW,
+  ).slice(0, Math.ceil(TOOLS_PAGE_SIZE / TOOLS_PER_ROW));
+
+  if (params.totalPages > 1) {
+    const pagination: VkReplyButton[] = [];
+    if (params.currentPage > 1) {
+      pagination.push({
+        text: "< Prev",
+        callback_data: `/tools ${params.groupId} ${params.currentPage - 1}`,
+      });
+    }
+    if (params.currentPage < params.totalPages) {
+      pagination.push({
+        text: "Next >",
+        callback_data: `/tools ${params.groupId} ${params.currentPage + 1}`,
+      });
+    }
+    if (pagination.length > 0) {
+      rows.push(pagination);
+    }
+  }
+
+  rows.push([
+    {
+      text: "< Back",
+      callback_data: "/tools",
+    },
+    {
+      text: "Close",
+      callback_data: VK_CLOSE_MENU_COMMAND,
+    },
+  ]);
+
+  return toChannelData(rows, {
+    inline: true,
+    oneTime: true,
+  });
+}
+
+export function buildVkToolDetailsChannelData(params: {
+  groupId: string;
+  currentPage: number;
+}): ReplyPayload["channelData"] | null {
+  return toChannelData(
+    [
+      [
+        {
+          text: "< Back",
+          callback_data:
+            params.currentPage > 1
+              ? `/tools ${params.groupId} ${params.currentPage}`
+              : `/tools ${params.groupId}`,
+        },
+        {
+          text: "Close",
+          callback_data: VK_CLOSE_MENU_COMMAND,
+        },
+      ],
+    ],
+    {
+      inline: true,
+      oneTime: true,
+    },
+  );
 }
 
 export function normalizeVkCommandShortcut(body: string): string {

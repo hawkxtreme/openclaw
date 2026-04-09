@@ -9,6 +9,7 @@ import {
   buildHelpMessage,
   buildToolsMessage,
 } from "../status.js";
+import type { ReplyPayload } from "../types.js";
 import { buildThreadingToolContext } from "./agent-runner-utils.js";
 import { resolveChannelAccountId } from "./channel-context.js";
 import { buildExportSessionReply } from "./commands-export-session.js";
@@ -18,6 +19,27 @@ import { extractExplicitGroupId } from "./group-id.js";
 import { resolveReplyToMode } from "./reply-threading.js";
 export { handleContextCommand } from "./commands-context-command.js";
 export { handleWhoamiCommand } from "./commands-whoami.js";
+
+const TOOLS_GROUPS_PER_PAGE = 6;
+const TOOLS_PER_PAGE = 6;
+
+type InteractiveToolsGroup = {
+  id: string;
+  label: string;
+  tools: Array<{
+    id: string;
+    label: string;
+    description: string;
+    rawDescription: string;
+    pluginId?: string;
+    channelId?: string;
+  }>;
+};
+
+type InteractiveToolsBrowseTarget =
+  | { kind: "groups"; page: number }
+  | { kind: "group"; groupId: string; page: number }
+  | { kind: "tool"; groupId: string; toolId: string };
 
 function parseCommandsPageArg(commandBodyNormalized: string):
   | { matched: false }
@@ -43,6 +65,161 @@ function parseCommandsPageArg(commandBodyNormalized: string):
     }
   }
   return { matched: true, error: "Usage: /commands [page|page=<n>]" };
+}
+
+function parsePositivePage(value: string): number | null {
+  if (!/^[0-9]+$/u.test(value)) {
+    return null;
+  }
+  const parsed = Number.parseInt(value, 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+}
+
+function parseInteractiveToolsTarget(
+  commandBodyNormalized: string,
+): InteractiveToolsBrowseTarget | null {
+  const trimmed = commandBodyNormalized.trim();
+  if (!trimmed.startsWith("/tools")) {
+    return null;
+  }
+  const argText = trimmed.replace(/^\/tools\b/i, "").trim();
+  if (!argText || argText === "compact" || argText === "verbose") {
+    return { kind: "groups", page: 1 };
+  }
+
+  const tokens = argText.split(/\s+/g).filter(Boolean);
+  const [firstToken, secondToken, thirdToken] = tokens;
+  if (!firstToken || thirdToken) {
+    return null;
+  }
+
+  const rootPage = parsePositivePage(firstToken);
+  if (rootPage) {
+    return { kind: "groups", page: rootPage };
+  }
+
+  if (!secondToken || secondToken === "compact" || secondToken === "verbose") {
+    return { kind: "group", groupId: firstToken.toLowerCase(), page: 1 };
+  }
+
+  const groupPage = parsePositivePage(secondToken);
+  if (groupPage) {
+    return { kind: "group", groupId: firstToken.toLowerCase(), page: groupPage };
+  }
+
+  return {
+    kind: "tool",
+    groupId: firstToken.toLowerCase(),
+    toolId: secondToken,
+  };
+}
+
+function buildInteractiveToolsGroups(result: EffectiveToolInventoryResult): InteractiveToolsGroup[] {
+  return result.groups
+    .map((group) => ({
+      id: group.id,
+      label: group.label,
+      tools: group.tools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+        description: tool.description,
+        rawDescription: tool.rawDescription,
+        pluginId: tool.pluginId,
+        channelId: tool.channelId,
+      })),
+    }))
+    .filter((group) => group.tools.length > 0);
+}
+
+function buildInteractiveToolsReply(params: {
+  result: EffectiveToolInventoryResult;
+  commandBodyNormalized: string;
+  commandPlugin: NonNullable<ReturnType<typeof getChannelPlugin>>;
+}): ReplyPayload | null {
+  const target = parseInteractiveToolsTarget(params.commandBodyNormalized);
+  if (!target) {
+    return null;
+  }
+
+  const groups = buildInteractiveToolsGroups(params.result);
+  if (groups.length === 0) {
+    return null;
+  }
+
+  if (target.kind === "groups") {
+    const totalPages = Math.max(1, Math.ceil(groups.length / TOOLS_GROUPS_PER_PAGE));
+    const currentPage = Math.max(1, Math.min(target.page, totalPages));
+    const startIndex = (currentPage - 1) * TOOLS_GROUPS_PER_PAGE;
+    const channelData = params.commandPlugin.commands?.buildToolsGroupListChannelData?.({
+      groups: groups.slice(startIndex, startIndex + TOOLS_GROUPS_PER_PAGE).map((group) => ({
+        id: group.id,
+        label: group.label,
+        count: group.tools.length,
+      })),
+      currentPage,
+      totalPages,
+    });
+    if (!channelData) {
+      return null;
+    }
+    return {
+      text: `Available tools\n\nProfile: ${params.result.profile}\nChoose a tool group:`,
+      channelData,
+    };
+  }
+
+  const group = groups.find((entry) => entry.id === target.groupId);
+  if (!group) {
+    return null;
+  }
+
+  if (target.kind === "group") {
+    const totalPages = Math.max(1, Math.ceil(group.tools.length / TOOLS_PER_PAGE));
+    const currentPage = Math.max(1, Math.min(target.page, totalPages));
+    const startIndex = (currentPage - 1) * TOOLS_PER_PAGE;
+    const pageTools = group.tools.slice(startIndex, startIndex + TOOLS_PER_PAGE);
+    const channelData = params.commandPlugin.commands?.buildToolsListChannelData?.({
+      groupId: group.id,
+      groupLabel: group.label,
+      tools: pageTools.map((tool) => ({
+        id: tool.id,
+        label: tool.label,
+      })),
+      currentPage,
+      totalPages,
+    });
+    if (!channelData) {
+      return null;
+    }
+    const header =
+      totalPages > 1
+        ? `${group.label} — ${group.tools.length} available (page ${currentPage}/${totalPages})`
+        : `${group.label} — ${group.tools.length} available`;
+    return {
+      text: `${header}\nTap a tool for details.`,
+      channelData,
+    };
+  }
+
+  const toolIndex = group.tools.findIndex(
+    (tool) => tool.id.toLowerCase() === target.toolId.toLowerCase(),
+  );
+  if (toolIndex < 0) {
+    return null;
+  }
+  const tool = group.tools[toolIndex];
+  const currentPage = Math.max(1, Math.floor(toolIndex / TOOLS_PER_PAGE) + 1);
+  const channelData = params.commandPlugin.commands?.buildToolDetailsChannelData?.({
+    groupId: group.id,
+    currentPage,
+  });
+  if (!channelData) {
+    return null;
+  }
+  return {
+    text: `${tool.label}\n\n${group.label}\n${tool.rawDescription || tool.description}`,
+    channelData,
+  };
 }
 
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
@@ -122,8 +299,20 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
     return null;
   }
   const normalized = params.command.commandBodyNormalized;
+  const surface = params.ctx.Surface;
+  const commandPlugin = surface ? getChannelPlugin(surface) : null;
+  const hasInteractiveToolsSupport = Boolean(
+    commandPlugin?.commands?.buildToolsGroupListChannelData ||
+      commandPlugin?.commands?.buildToolsListChannelData ||
+      commandPlugin?.commands?.buildToolDetailsChannelData,
+  );
+  const interactiveTarget = hasInteractiveToolsSupport
+    ? parseInteractiveToolsTarget(normalized)
+    : null;
   let verbose = false;
-  if (normalized === "/tools" || normalized === "/tools compact") {
+  if (interactiveTarget) {
+    verbose = false;
+  } else if (normalized === "/tools" || normalized === "/tools compact") {
     verbose = false;
   } else if (normalized === "/tools verbose") {
     verbose = true;
@@ -186,6 +375,19 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
         params.ctx.ChatType,
       ),
     });
+    const interactiveReply = commandPlugin
+      ? buildInteractiveToolsReply({
+          result,
+          commandBodyNormalized: normalized,
+          commandPlugin,
+        })
+      : null;
+    if (interactiveReply) {
+      return {
+        shouldContinue: false,
+        reply: interactiveReply,
+      };
+    }
     return {
       shouldContinue: false,
       reply: { text: buildToolsMessage(result, { verbose }) },

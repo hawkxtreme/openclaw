@@ -9,6 +9,9 @@ import {
   buildVkModelBrowseChannelData,
   buildVkModelsListChannelData,
   buildVkModelsProviderChannelData,
+  buildVkToolDetailsChannelData,
+  buildVkToolsGroupListChannelData,
+  buildVkToolsListChannelData,
 } from "./command-ui.js";
 import { vkGatewayAdapter } from "./gateway.js";
 import { resolveVkGroupRequireMention } from "./group-policy.js";
@@ -31,6 +34,9 @@ export const vkPlugin: ChannelPlugin<ResolvedVkAccount, VkProbeResult> = createC
       buildModelsProviderChannelData: buildVkModelsProviderChannelData,
       buildModelsListChannelData: buildVkModelsListChannelData,
       buildModelBrowseChannelData: buildVkModelBrowseChannelData,
+      buildToolsGroupListChannelData: buildVkToolsGroupListChannelData,
+      buildToolsListChannelData: buildVkToolsListChannelData,
+      buildToolDetailsChannelData: buildVkToolDetailsChannelData,
     },
     groups: {
       resolveRequireMention: resolveVkGroupRequireMention,

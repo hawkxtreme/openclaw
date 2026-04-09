@@ -330,6 +330,70 @@ describe("vk plugin adapters", () => {
         ],
       },
     });
+
+    expect(vkPlugin.commands?.buildToolsGroupListChannelData?.({
+      groups: [
+        { id: "core", label: "Built-in tools", count: 20 },
+        { id: "plugin", label: "Connected tools", count: 2 },
+      ],
+      currentPage: 1,
+      totalPages: 1,
+    })).toEqual({
+      vk: {
+        inline: true,
+        oneTime: true,
+        buttons: [
+          [
+            { text: "Built-in (20)", callback_data: "/tools core" },
+            { text: "Connected (2)", callback_data: "/tools plugin" },
+          ],
+          [{ text: "Close", callback_data: "/vk-menu-close" }],
+        ],
+      },
+    });
+
+    expect(vkPlugin.commands?.buildToolsListChannelData?.({
+      groupId: "plugin",
+      groupLabel: "Connected tools",
+      tools: [
+        { id: "browser", label: "Browser" },
+        { id: "memory_search", label: "Memory Search" },
+      ],
+      currentPage: 1,
+      totalPages: 2,
+    })).toEqual({
+      vk: {
+        inline: true,
+        oneTime: true,
+        buttons: [
+          [
+            { text: "Browser", callback_data: "/tools plugin browser" },
+            { text: "Memory Search", callback_data: "/tools plugin memory_search" },
+          ],
+          [{ text: "Next >", callback_data: "/tools plugin 2" }],
+          [
+            { text: "< Back", callback_data: "/tools" },
+            { text: "Close", callback_data: "/vk-menu-close" },
+          ],
+        ],
+      },
+    });
+
+    expect(vkPlugin.commands?.buildToolDetailsChannelData?.({
+      groupId: "plugin",
+      currentPage: 2,
+    })).toEqual({
+      vk: {
+        inline: true,
+        oneTime: true,
+        buttons: [
+          [
+            { text: "< Back", callback_data: "/tools plugin 2" },
+            { text: "Close", callback_data: "/vk-menu-close" },
+          ],
+        ],
+      },
+    });
   });
 
   it("sends command keyboards as inline callback buttons on callback-api accounts", async () => {
