@@ -297,18 +297,30 @@ export function createVkCallbackHandler(
 
       const answer = await options.onInteractiveEvent?.(interactive);
       if (answer?.eventData !== undefined) {
-        await sendVkMessageEventAnswer({
-          token: account.token,
-          eventId: interactive.callbackEventId,
-          userId: interactive.senderId,
-          peerId: interactive.peerId,
-          eventData: answer.eventData,
-          apiVersion: account.config.apiVersion,
-          fetchImpl: options.fetchImpl,
-        });
-        tracer?.record("interactive.answer.sent", {
-          accountId: account.accountId,
-        });
+        try {
+          await sendVkMessageEventAnswer({
+            token: account.token,
+            // VK expects the nested message_event object.event_id here, not the
+            // outer callback envelope event_id used for webhook dedupe.
+            eventId: interactive.callbackEventId,
+            userId: interactive.senderId,
+            peerId: interactive.peerId,
+            eventData: answer.eventData,
+            apiVersion: account.config.apiVersion,
+            fetchImpl: options.fetchImpl,
+          });
+          tracer?.record("interactive.answer.sent", {
+            accountId: account.accountId,
+          });
+        } catch (error) {
+          // The snackbar/modal ack is a best-effort UX hint. If VK rejects it,
+          // keep the callback flow successful so the actual interactive action
+          // does not get retried or surfaced as a failed webhook.
+          tracer?.record("interactive.answer.failed", {
+            accountId: account.accountId,
+            error: String(error),
+          });
+        }
       }
 
       tracer?.record("webhook.accepted", {

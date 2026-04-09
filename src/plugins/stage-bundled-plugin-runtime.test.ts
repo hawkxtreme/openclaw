@@ -9,9 +9,27 @@ import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
 const tempDirs: string[] = [];
+let cachedFileSymlinkSupport: boolean | null = null;
 
 function makeRepoRoot(prefix: string): string {
   return makeTrackedTempDir(prefix, tempDirs);
+}
+
+function supportsFileSymlink(): boolean {
+  if (cachedFileSymlinkSupport !== null) {
+    return cachedFileSymlinkSupport;
+  }
+  const dir = makeRepoRoot("openclaw-stage-bundled-runtime-probe-");
+  const sourcePath = path.join(dir, "source.txt");
+  const linkPath = path.join(dir, "link.txt");
+  fs.writeFileSync(sourcePath, "probe\n", "utf8");
+  try {
+    fs.symlinkSync(sourcePath, linkPath);
+    cachedFileSymlinkSupport = true;
+  } catch {
+    cachedFileSymlinkSupport = false;
+  }
+  return cachedFileSymlinkSupport;
 }
 
 function createDistPluginDir(repoRoot: string, pluginId: string) {
@@ -285,7 +303,7 @@ describe("stageBundledPluginRuntime", () => {
       pluginId: "diffs",
       relativePath: "assets/info.txt",
       expectedText: "ok\n",
-      symbolicLink: true,
+      symbolicLink: supportsFileSymlink(),
     });
     const runtimePackagePath = path.join(
       repoRoot,
@@ -419,8 +437,44 @@ describe("stageBundledPluginRuntime", () => {
       "feishu-doc",
       "SKILL.md",
     );
-    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(true);
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(supportsFileSymlink());
     expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# Feishu Doc\n");
+
+    symlinkSpy.mockRestore();
+  });
+
+  it("falls back to copying non-js artifacts when Windows file symlinks are denied", () => {
+    const repoRoot = makeRepoRoot("openclaw-stage-bundled-runtime-eperm-");
+    createDistPluginDir(repoRoot, "vk");
+    setupRepoFiles(repoRoot, {
+      [bundledDistPluginFile("vk", "index.js")]: "export default {}\n",
+      [bundledDistPluginFile("vk", "skills/live-smoke/SKILL.md")]: "# VK Live Smoke\n",
+    });
+
+    const realSymlinkSync = fs.symlinkSync.bind(fs);
+    const symlinkSpy = vi.spyOn(fs, "symlinkSync").mockImplementation(((target, link, type) => {
+      const linkPath = String(link);
+      if (linkPath.endsWith(path.join("skills", "live-smoke", "SKILL.md"))) {
+        const err = Object.assign(new Error("operation not permitted"), { code: "EPERM" });
+        throw err;
+      }
+      return realSymlinkSync(String(target), linkPath, type);
+    }) as typeof fs.symlinkSync);
+
+    expect(() => stageBundledPluginRuntime({ repoRoot })).not.toThrow();
+
+    const runtimeSkillPath = path.join(
+      repoRoot,
+      "dist-runtime",
+      "extensions",
+      "vk",
+      "skills",
+      "live-smoke",
+      "SKILL.md",
+    );
+    expect(fs.existsSync(runtimeSkillPath)).toBe(true);
+    expect(fs.lstatSync(runtimeSkillPath).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(runtimeSkillPath, "utf8")).toBe("# VK Live Smoke\n");
 
     symlinkSpy.mockRestore();
   });

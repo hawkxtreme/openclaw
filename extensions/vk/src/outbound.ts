@@ -6,13 +6,25 @@ import {
   resolveInteractiveTextFallback,
 } from "openclaw/plugin-sdk/interactive-runtime";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
+import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import {
   resolveDefaultVkAccountId,
   resolveVkAccount,
   type ResolvedVkAccount,
 } from "./accounts.js";
-import { buildVkKeyboard, resolveVkButtonsFromPayload } from "./keyboard.js";
-import { normalizeVkReplyToId } from "./reply-to.js";
+import {
+  rememberVkInteractiveMessageId,
+  resolveRememberedVkInteractiveMessageId,
+} from "./interactive-state.js";
+import {
+  resolveLatestVkInteractiveMenuId,
+  retireOlderVkInteractiveMenus,
+} from "./interactive-menu.js";
+import { buildVkKeyboard, resolveVkKeyboardSpecFromPayload } from "./keyboard.js";
+import {
+  normalizeVkConversationMessageId,
+  normalizeVkReplyToId,
+} from "./reply-to.js";
 import { sendVkPayload } from "./vk-core/outbound/media.js";
 import { normalizeVkPeerId, sendVkText } from "./vk-core/outbound/send.js";
 
@@ -42,6 +54,7 @@ async function sendVkOutboundPayload(params: {
   text?: string;
   mediaUrls?: string[];
   replyToId?: string | null;
+  editConversationMessageId?: string | null;
   mediaLocalRoots?: readonly string[];
   forceDocument?: boolean;
   keyboard?: string;
@@ -53,6 +66,7 @@ async function sendVkOutboundPayload(params: {
     keyboard: params.keyboard,
     mediaUrls: params.mediaUrls,
     replyTo: normalizeVkReplyToId(params.replyToId),
+    editConversationMessageId: params.editConversationMessageId ?? undefined,
     mediaLocalRoots: params.mediaLocalRoots,
     forceDocument: params.forceDocument,
   });
@@ -64,7 +78,96 @@ async function sendVkOutboundPayload(params: {
       peerId: result.peerId,
       randomId: result.randomId,
       attachments: result.attachments,
+      conversationMessageId: result.conversationMessageId,
     },
+  };
+}
+
+export async function sendVkResolvedOutboundPayload(params: {
+  cfg: Parameters<NonNullable<ChannelPlugin<ResolvedVkAccount>["outbound"]["sendPayload"]>>[0]["cfg"];
+  to: string;
+  payload: ReplyPayload;
+  accountId?: string | null;
+  replyToId?: string | null;
+  editConversationMessageId?: string | null;
+  mediaLocalRoots?: readonly string[];
+  forceDocument?: boolean;
+}) {
+  const account = resolveVkAccount({
+    cfg: params.cfg,
+    accountId: params.accountId,
+  });
+  const interactive = normalizeInteractiveReply(params.payload.interactive);
+  const resolvedText =
+    resolveInteractiveTextFallback({
+      text: params.payload.text,
+      interactive,
+    }) ?? params.payload.text;
+  const parts = resolveSendableOutboundReplyParts({
+    ...params.payload,
+    text: resolvedText,
+  });
+  const keyboard = buildVkKeyboard(
+    resolveVkKeyboardSpecFromPayload(params.payload),
+    account.config.transport,
+  );
+  const requestedEditConversationMessageId = normalizeVkConversationMessageId(
+    params.editConversationMessageId ?? null,
+  );
+  let rememberedInteractiveMessageId: string | undefined;
+  if (keyboard && !parts.mediaUrls.length && !requestedEditConversationMessageId) {
+    rememberedInteractiveMessageId = resolveRememberedVkInteractiveMessageId({
+      accountId: account.accountId,
+      peerId: params.to,
+    });
+    if (!rememberedInteractiveMessageId) {
+      rememberedInteractiveMessageId = await resolveLatestVkInteractiveMenuId({
+        account,
+        peerId: params.to,
+      });
+      if (rememberedInteractiveMessageId) {
+        rememberVkInteractiveMessageId({
+          accountId: account.accountId,
+          peerId: params.to,
+          conversationMessageId: rememberedInteractiveMessageId,
+        });
+      }
+    }
+  }
+  const editConversationMessageId =
+    requestedEditConversationMessageId ??
+    rememberedInteractiveMessageId;
+
+  const result = await sendVkOutboundPayload({
+    account,
+    to: params.to,
+    text: parts.hasText ? parts.trimmedText : undefined,
+    keyboard,
+    mediaUrls: parts.mediaUrls,
+    replyToId: params.replyToId ?? null,
+    editConversationMessageId: editConversationMessageId ?? null,
+    mediaLocalRoots: params.mediaLocalRoots,
+    forceDocument: params.forceDocument,
+  });
+  const rememberedConversationMessageId = normalizeVkConversationMessageId(
+    result.meta?.conversationMessageId,
+  );
+  if (rememberedConversationMessageId) {
+    rememberVkInteractiveMessageId({
+      accountId: account.accountId,
+      peerId: params.to,
+      conversationMessageId: rememberedConversationMessageId,
+    });
+    await retireOlderVkInteractiveMenus({
+      account,
+      peerId: params.to,
+      keepConversationMessageId: rememberedConversationMessageId,
+    });
+  }
+
+  return {
+    channel: "vk" as const,
+    ...result,
   };
 }
 
@@ -83,37 +186,16 @@ export const vkOutboundAdapter: NonNullable<ChannelPlugin<ResolvedVkAccount>["ou
       to: normalized,
     };
   },
-  sendPayload: async ({ cfg, to, payload, accountId, replyToId, mediaLocalRoots, forceDocument }) => {
-    const account = resolveVkAccount({
+  sendPayload: async ({ cfg, to, payload, accountId, replyToId, mediaLocalRoots, forceDocument }) =>
+    await sendVkResolvedOutboundPayload({
       cfg,
+      to,
+      payload,
       accountId,
-    });
-    const interactive = normalizeInteractiveReply(payload.interactive);
-    const resolvedText =
-      resolveInteractiveTextFallback({
-        text: payload.text,
-        interactive,
-      }) ?? payload.text;
-    const parts = resolveSendableOutboundReplyParts({
-      ...payload,
-      text: resolvedText,
-    });
-    const keyboard = buildVkKeyboard(resolveVkButtonsFromPayload(payload));
-
-    return {
-      channel: "vk",
-      ...(await sendVkOutboundPayload({
-        account,
-        to,
-        text: parts.hasText ? parts.trimmedText : undefined,
-        keyboard,
-        mediaUrls: parts.mediaUrls,
-        replyToId: replyToId ?? null,
-        mediaLocalRoots,
-        forceDocument,
-      })),
-    };
-  },
+      replyToId: replyToId ?? null,
+      mediaLocalRoots,
+      forceDocument,
+    }),
   ...createAttachedChannelResultAdapter({
     channel: "vk",
     sendText: async ({ cfg, to, text, accountId, replyToId }) => {

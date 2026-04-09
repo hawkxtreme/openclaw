@@ -96,7 +96,11 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   if (!workspaceDir) {
     return;
   }
-  const watchEnabled = params.config?.skills?.load?.watch !== false;
+  // Some one-shot runtimes (for example synthetic or probe-style harnesses)
+  // need to exit cleanly after the current turn instead of keeping chokidar
+  // watchers alive. Let those callers opt out without changing user config.
+  const watchEnabled =
+    process.env.OPENCLAW_DISABLE_SKILLS_WATCH !== "1" && params.config?.skills?.load?.watch !== false;
   const debounceMsRaw = params.config?.skills?.load?.watchDebounceMs;
   const debounceMs =
     typeof debounceMsRaw === "number" && Number.isFinite(debounceMsRaw)
@@ -168,21 +172,39 @@ export function ensureSkillsWatcher(params: { workspaceDir: string; config?: Ope
   watchers.set(workspaceDir, state);
 }
 
-export async function resetSkillsRefreshForTest(): Promise<void> {
-  resetSkillsRefreshStateForTest();
+async function disposeWatchState(state: SkillsWatchState): Promise<void> {
+  if (state.timer) {
+    clearTimeout(state.timer);
+  }
+  try {
+    await state.watcher.close();
+  } catch {
+    // Best-effort cleanup for runtime/test teardown.
+  }
+}
+
+export async function disposeSkillsWatchers(params?: { workspaceDir?: string }): Promise<void> {
+  const workspaceDir = params?.workspaceDir?.trim();
+  if (workspaceDir) {
+    const active = watchers.get(workspaceDir);
+    if (!active) {
+      return;
+    }
+    watchers.delete(workspaceDir);
+    await disposeWatchState(active);
+    return;
+  }
 
   const active = Array.from(watchers.values());
   watchers.clear();
   await Promise.all(
     active.map(async (state) => {
-      if (state.timer) {
-        clearTimeout(state.timer);
-      }
-      try {
-        await state.watcher.close();
-      } catch {
-        // Best-effort test cleanup.
-      }
+      await disposeWatchState(state);
     }),
   );
+}
+
+export async function resetSkillsRefreshForTest(): Promise<void> {
+  resetSkillsRefreshStateForTest();
+  await disposeSkillsWatchers();
 }

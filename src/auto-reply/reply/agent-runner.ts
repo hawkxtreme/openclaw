@@ -106,6 +106,16 @@ export async function runReplyAgent(params: {
   resetTriggered?: boolean;
   replyOperation?: ReplyOperation;
 }): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[run-reply-agent] ${step} session=${params.sessionKey ?? params.followupRun.run.sessionId ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
   const {
     commandBody,
     followupRun,
@@ -290,8 +300,11 @@ export async function runReplyAgent(params: {
   let runFollowupTurn = queuedRunFollowupTurn;
 
   try {
+    traceIngress("before-signalRunStart");
     await typingSignals.signalRunStart();
+    traceIngress("after-signalRunStart");
 
+    traceIngress("before-runPreflightCompactionIfNeeded");
     activeSessionEntry = await runPreflightCompactionIfNeeded({
       cfg,
       followupRun,
@@ -305,7 +318,9 @@ export async function runReplyAgent(params: {
       isHeartbeat,
       replyOperation,
     });
+    traceIngress("after-runPreflightCompactionIfNeeded");
 
+    traceIngress("before-runMemoryFlushIfNeeded");
     activeSessionEntry = await runMemoryFlushIfNeeded({
       cfg,
       followupRun,
@@ -322,6 +337,7 @@ export async function runReplyAgent(params: {
       isHeartbeat,
       replyOperation,
     });
+    traceIngress("after-runMemoryFlushIfNeeded");
 
     runFollowupTurn = createFollowupRunner({
       opts,
@@ -441,6 +457,7 @@ export async function runReplyAgent(params: {
 
     replyOperation.setPhase("running");
     const runStartedAt = Date.now();
+    traceIngress("before-runAgentTurnWithFallback");
     const runOutcome = await runAgentTurnWithFallback({
       commandBody,
       followupRun,
@@ -465,6 +482,7 @@ export async function runReplyAgent(params: {
       storePath,
       resolvedVerboseLevel,
     });
+    traceIngress("after-runAgentTurnWithFallback");
 
     if (runOutcome.kind === "final") {
       if (!replyOperation.result) {
@@ -509,11 +527,15 @@ export async function runReplyAgent(params: {
     const payloadArray = runResult.payloads ?? [];
 
     if (blockReplyPipeline) {
+      traceIngress("before-blockReplyPipeline-flush");
       await blockReplyPipeline.flush({ force: true });
       blockReplyPipeline.stop();
+      traceIngress("after-blockReplyPipeline-flush");
     }
     if (pendingToolTasks.size > 0) {
+      traceIngress(`before-pendingToolTasks size=${pendingToolTasks.size}`);
       await Promise.allSettled(pendingToolTasks);
+      traceIngress("after-pendingToolTasks");
     }
 
     const usage = runResult.meta?.agentMeta?.usage;
@@ -576,6 +598,7 @@ export async function runReplyAgent(params: {
       systemPromptReport: runResult.meta?.systemPromptReport,
       usageIsContextSnapshot: false,
     });
+    traceIngress("after-persistRunSessionUsage");
 
     // Drain any late tool/block deliveries before deciding there's "nothing to send".
     // Otherwise, a late typing trigger (e.g. from a tool callback) can outlive the run and
@@ -608,6 +631,7 @@ export async function runReplyAgent(params: {
       accountId: sessionCtx.AccountId,
       normalizeMediaPaths: normalizeReplyMediaPaths,
     });
+    traceIngress("after-buildReplyPayloads");
     const { replyPayloads } = payloadResult;
     didLogHeartbeatStrip = payloadResult.didLogHeartbeatStrip;
 
@@ -626,10 +650,15 @@ export async function runReplyAgent(params: {
     // turn) already covers the commitment — avoids false positives (#32228).
     const coveredByExistingCron =
       hasReminderCommitment && successfulCronAdds === 0
-        ? await hasSessionRelatedCronJobs({
-            cronStorePath: cfg.cron?.store,
-            sessionKey,
-          })
+        ? await (async () => {
+            traceIngress("before-hasSessionRelatedCronJobs");
+            const result = await hasSessionRelatedCronJobs({
+              cronStorePath: cfg.cron?.store,
+              sessionKey,
+            });
+            traceIngress("after-hasSessionRelatedCronJobs");
+            return result;
+          })()
         : false;
     const guardedReplyPayloads =
       hasReminderCommitment && successfulCronAdds === 0 && !coveredByExistingCron
@@ -637,6 +666,7 @@ export async function runReplyAgent(params: {
         : replyPayloads;
 
     await signalTypingIfNeeded(guardedReplyPayloads, typingSignals);
+    traceIngress("after-signalTypingIfNeeded");
 
     if (isDiagnosticsEnabled(cfg) && hasNonzeroUsage(usage)) {
       const input = usage.input ?? 0;
@@ -675,6 +705,7 @@ export async function runReplyAgent(params: {
         durationMs: Date.now() - runStartedAt,
       });
     }
+    traceIngress("after-diagnostics");
 
     const responseUsageRaw =
       activeSessionEntry?.responseUsage ??
@@ -702,6 +733,7 @@ export async function runReplyAgent(params: {
         responseUsageLine = formatted;
       }
     }
+    traceIngress("after-response-usage-line");
 
     // If verbose is enabled, prepend operational run notices.
     let finalPayloads = guardedReplyPayloads;
@@ -767,6 +799,7 @@ export async function runReplyAgent(params: {
 
     if (autoCompactionCount > 0) {
       const previousSessionId = activeSessionEntry?.sessionId ?? followupRun.run.sessionId;
+      traceIngress(`before-incrementRunCompactionCount count=${autoCompactionCount}`);
       const count = await incrementRunCompactionCount({
         cfg,
         sessionEntry: activeSessionEntry,
@@ -778,6 +811,7 @@ export async function runReplyAgent(params: {
         contextTokensUsed,
         newSessionId: runResult.meta?.agentMeta?.sessionId,
       });
+      traceIngress("after-incrementRunCompactionCount");
       const refreshedSessionEntry =
         sessionKey && activeSessionStore ? activeSessionStore[sessionKey] : undefined;
       if (refreshedSessionEntry) {
@@ -815,6 +849,7 @@ export async function runReplyAgent(params: {
     if (responseUsageLine) {
       finalPayloads = appendUsageLine(finalPayloads, responseUsageLine);
     }
+    traceIngress(`before-finalizeWithFollowup payloads=${finalPayloads.length}`);
 
     return finalizeWithFollowup(
       finalPayloads.length === 1 ? finalPayloads[0] : finalPayloads,

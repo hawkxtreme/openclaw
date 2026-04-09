@@ -31,6 +31,7 @@ vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", async (importOriginal) => 
 import {
   handleVkInboundMessage,
 } from "../../src/inbound.js";
+import { clearVkInteractiveMessageState } from "../../src/interactive-state.js";
 import { resolveVkAccount } from "../../src/accounts.js";
 import { clearVkRuntime, setVkRuntime } from "../../src/runtime.js";
 import type { OpenClawConfig } from "../../src/types.js";
@@ -73,6 +74,7 @@ describe("vk inbound handling", () => {
 
   afterEach(() => {
     clearVkRuntime();
+    clearVkInteractiveMessageState();
   });
 
   it("routes direct messages through the direct-DM dispatcher", async () => {
@@ -134,6 +136,77 @@ describe("vk inbound handling", () => {
       messageId: "501",
       commandAuthorized: true,
     });
+  });
+
+  it("sends standalone DM replies without VK reply_to threading", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    let requestedUrl: URL | undefined;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9510,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:standalone-dm-1",
+        messageId: "510",
+        peerId: 42,
+        senderId: 42,
+        text: "show status",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const params = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await params?.deliver?.({
+      text: "Standalone VK reply",
+    });
+
+    expect(requestedUrl?.pathname).toBe("/method/messages.send");
+    expect(requestedUrl?.searchParams.get("peer_id")).toBe("42");
+    expect(requestedUrl?.searchParams.get("message")).toBe("Standalone VK reply");
+    expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
   });
 
   it("prefers hidden VK payload commands over visible button labels in DMs", async () => {
@@ -240,6 +313,221 @@ describe("vk inbound handling", () => {
     expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
       rawBody: "/models openai",
     });
+  });
+
+  it("returns VK button suggestions for a bare slash in DMs", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 9501,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:slash-menu-1",
+        messageId: "505",
+        peerId: 42,
+        senderId: 42,
+        text: "/",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.pathname).toBe("/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK does not support inline slash autocomplete. Choose a command:",
+    );
+    expect(sendUrl?.searchParams.get("reply_to")).toBeNull();
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.inline).toBe(true);
+    expect(keyboard.buttons[0][0].action.label).toBe("Commands");
+    expect(keyboard.buttons[0][1].action.label).toBe("Help");
+    expect(keyboard.buttons[1][0].action.label).toBe("New");
+    expect(keyboard.buttons[1][1].action.label).toBe("Reset");
+    expect(keyboard.buttons[2][0].action.label).toBe("Model");
+    expect(keyboard.buttons[2][1].action.label).toBe("Models");
+    expect(keyboard.buttons[3][0].action.label).toBe("Status");
+    expect(keyboard.buttons[3][1].action.label).toBe("Tools");
+  });
+
+  it("returns narrowed VK button suggestions for slash prefixes in DMs", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 9502,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:slash-menu-2",
+        messageId: "506",
+        peerId: 42,
+        senderId: 42,
+        text: "/mo",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK does not support inline slash autocomplete. Matches for /mo:",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.buttons).toHaveLength(1);
+    expect(keyboard.buttons[0][0].action.label).toBe("Model");
+    expect(keyboard.buttons[0][1].action.label).toBe("Models");
+  });
+
+  it("returns matching VK button suggestions for stop and status prefixes in DMs", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 9503,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:slash-menu-3",
+        messageId: "507",
+        peerId: 42,
+        senderId: 42,
+        text: "/st",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK does not support inline slash autocomplete. Matches for /st:",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.buttons).toHaveLength(1);
+    expect(keyboard.buttons[0][0].action.label).toBe("Status");
+    expect(keyboard.buttons[0][1].action.label).toBe("Stop");
   });
 
   it("routes allowed group messages through the shared reply dispatcher", async () => {
@@ -496,5 +784,416 @@ describe("vk inbound handling", () => {
     await params?.typingCallbacks?.onReplyStart?.();
 
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("edits callback-driven DM menus in place instead of sending a new reply", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "callback-api",
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:interactive-edit-1",
+        messageId: "callback-event-1",
+        conversationMessageId: "72",
+        editConversationMessageId: "72",
+        peerId: 42,
+        senderId: 42,
+        text: "/models openai 2",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+        messagePayload: { oc: "/models openai 2" },
+      },
+    });
+
+    const params = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await params?.deliver?.({
+      text: "Models (openai) — 40 available (page 2/7)",
+      channelData: {
+        vk: {
+          inline: true,
+          oneTime: false,
+          buttons: [[{ text: "< Prev", callback_data: "/models openai 1" }]],
+        },
+      },
+    });
+
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.edit",
+      "/method/messages.getHistory",
+    ]);
+    expect(requestedUrls[0]?.searchParams.get("peer_id")).toBe("42");
+    expect(requestedUrls[0]?.searchParams.get("cmid")).toBe("72");
+    expect(requestedUrls[0]?.searchParams.get("reply_to")).toBeNull();
+  });
+
+  it("reuses the last interactive DM menu for typed slash-command menus", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+
+        if (url.pathname === "/method/messages.send") {
+          return new Response(
+            JSON.stringify({
+              response: 9511,
+            }),
+          );
+        }
+
+        if (url.pathname === "/method/messages.getHistory") {
+          return new Response(
+            JSON.stringify({
+              response: {
+                count: 1,
+                items: [
+                  {
+                    id: 9511,
+                    conversation_message_id: 200,
+                    out: 1,
+                    text: "Select a provider (1/4):",
+                  },
+                ],
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "callback-api",
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:typed-menu-1",
+        messageId: "601",
+        peerId: 42,
+        senderId: 42,
+        text: "/models",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const firstParams = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await firstParams?.deliver?.({
+      text: "Select a provider (1/4):",
+      channelData: {
+        vk: {
+          inline: true,
+          oneTime: false,
+          buttons: [[{ text: "proxy (3)", callback_data: "/models proxy" }]],
+        },
+      },
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:typed-menu-2",
+        messageId: "602",
+        peerId: 42,
+        senderId: 42,
+        text: "/models proxy",
+        createdAt: 1700000001000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const secondParams = dispatchInboundDirectDmWithRuntimeMock.mock.calls[1]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await secondParams?.deliver?.({
+      text: "Models (proxy) — 3 available",
+      channelData: {
+        vk: {
+          inline: true,
+          oneTime: false,
+          buttons: [[{ text: "GPT-5.4 Proxy", callback_data: "/model proxy/gpt-5.4-proxy" }]],
+        },
+      },
+    });
+
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.getHistory",
+      "/method/messages.send",
+      "/method/messages.getHistory",
+      "/method/messages.getHistory",
+      "/method/messages.edit",
+      "/method/messages.getHistory",
+    ]);
+    expect(requestedUrls[4]?.searchParams.get("cmid")).toBe("200");
+    expect(requestedUrls[4]?.searchParams.get("message")).toBe("Models (proxy) — 3 available");
+  });
+
+  it("restores the latest interactive DM menu after state reset instead of sending a duplicate", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    let historyCallCount = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+
+        if (url.pathname === "/method/messages.send") {
+          return new Response(
+            JSON.stringify({
+              response: 9512,
+            }),
+          );
+        }
+
+        if (url.pathname === "/method/messages.getHistory") {
+          historyCallCount += 1;
+          return new Response(
+            JSON.stringify({
+              response: {
+                count: historyCallCount >= 3 ? 2 : 0,
+                items:
+                  historyCallCount === 2
+                    ? [
+                        {
+                          id: 9512,
+                          conversation_message_id: 201,
+                          out: 1,
+                          text: "Select a provider (1/4):",
+                          keyboard: {
+                            inline: true,
+                            one_time: false,
+                            buttons: [[{ action: { label: "proxy (3)", type: "callback" } }]],
+                          },
+                        },
+                      ]
+                    : historyCallCount >= 3
+                      ? [
+                          {
+                            id: 9512,
+                            conversation_message_id: 201,
+                            out: 1,
+                            text: "Select a provider (1/4):",
+                            keyboard: {
+                              inline: true,
+                              one_time: false,
+                              buttons: [[{ action: { label: "proxy (3)", type: "callback" } }]],
+                            },
+                          },
+                          {
+                            id: 9500,
+                            conversation_message_id: 199,
+                            out: 0,
+                            text: "/models",
+                            keyboard: null,
+                          },
+                        ]
+                      : [],
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "callback-api",
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:typed-menu-reset-1",
+        messageId: "701",
+        peerId: 42,
+        senderId: 42,
+        text: "/models",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const firstParams = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await firstParams?.deliver?.({
+      text: "Select a provider (1/4):",
+      channelData: {
+        vk: {
+          inline: true,
+          oneTime: false,
+          buttons: [[{ text: "proxy (3)", callback_data: "/models proxy" }]],
+        },
+      },
+    });
+
+    clearVkInteractiveMessageState();
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "callback-api",
+        eventType: "message_new",
+        dedupeKey: "event:typed-menu-reset-2",
+        messageId: "702",
+        peerId: 42,
+        senderId: 42,
+        text: "/models proxy",
+        createdAt: 1700000001000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    const secondParams = dispatchInboundDirectDmWithRuntimeMock.mock.calls[1]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await secondParams?.deliver?.({
+      text: "Models (proxy) — 3 available",
+      channelData: {
+        vk: {
+          inline: true,
+          oneTime: false,
+          buttons: [[{ text: "GPT-5.4 Proxy", callback_data: "/model proxy/gpt-5.4-proxy" }]],
+        },
+      },
+    });
+
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.getHistory",
+      "/method/messages.send",
+      "/method/messages.getHistory",
+      "/method/messages.getHistory",
+      "/method/messages.getHistory",
+      "/method/messages.edit",
+      "/method/messages.getHistory",
+    ]);
+    expect(requestedUrls[5]?.searchParams.get("cmid")).toBe("201");
+    expect(requestedUrls[5]?.searchParams.get("message")).toBe("Models (proxy) — 3 available");
   });
 });

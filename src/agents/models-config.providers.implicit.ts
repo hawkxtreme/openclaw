@@ -11,6 +11,7 @@ import {
   isNonSecretApiKeyMarker,
   resolveNonEnvSecretRefApiKeyMarker,
 } from "./model-auth-markers.js";
+import { inferImplicitProviderPluginIds } from "./models-config.providers.scope.js";
 import type {
   ProviderApiKeyResolver,
   ProviderAuthResolver,
@@ -23,6 +24,16 @@ import {
 import { findNormalizedProviderValue } from "./provider-id.js";
 
 const log = createSubsystemLogger("agents/model-providers");
+function createImplicitProviderTrace() {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(`[implicit-providers] ${step} elapsedMs=${Date.now() - startedAt}`);
+  };
+}
 
 const PROVIDER_IMPLICIT_MERGERS: Partial<
   Record<
@@ -64,7 +75,14 @@ function resolveLiveProviderCatalogTimeoutMs(env: NodeJS.ProcessEnv): number | n
   return Number.isFinite(parsed) && parsed > 0 ? parsed : 15_000;
 }
 
-function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | undefined {
+async function resolveProviderDiscoveryFilter(params: {
+  agentDir?: string;
+  config?: OpenClawConfig;
+  env: NodeJS.ProcessEnv;
+  explicitProviders?: Record<string, ProviderConfig> | null;
+  workspaceDir?: string;
+}): Promise<string[] | undefined> {
+  const env = params.env;
   const testRaw = env.OPENCLAW_TEST_ONLY_PROVIDER_PLUGIN_IDS?.trim();
   if (testRaw) {
     const ids = testRaw
@@ -75,18 +93,24 @@ function resolveProviderDiscoveryFilter(env: NodeJS.ProcessEnv): string[] | unde
   }
   const live =
     env.OPENCLAW_LIVE_TEST === "1" || env.OPENCLAW_LIVE_GATEWAY === "1" || env.LIVE === "1";
-  if (!live) {
-    return undefined;
+  if (live) {
+    const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
+    if (!raw || raw === "all") {
+      return undefined;
+    }
+    const ids = raw
+      .split(",")
+      .map((value) => value.trim())
+      .filter(Boolean);
+    return ids.length > 0 ? [...new Set(ids)] : [];
   }
-  const raw = env.OPENCLAW_LIVE_PROVIDERS?.trim();
-  if (!raw || raw === "all") {
-    return undefined;
-  }
-  const ids = raw
-    .split(",")
-    .map((value) => value.trim())
-    .filter(Boolean);
-  return ids.length > 0 ? [...new Set(ids)] : undefined;
+  return inferImplicitProviderPluginIds({
+    agentDir: params.agentDir,
+    config: params.config,
+    env,
+    explicitProviders: params.explicitProviders,
+    workspaceDir: params.workspaceDir,
+  });
 }
 
 function mergeImplicitProviderSet(
@@ -164,7 +188,9 @@ async function resolvePluginImplicitProviders(
   const byOrder = groupPluginDiscoveryProvidersByOrder(providers);
   const discovered: Record<string, ProviderConfig> = {};
   const catalogConfig = buildPluginCatalogConfig(ctx);
+  const trace = createImplicitProviderTrace();
   for (const provider of byOrder[order]) {
+    trace(`before-runProviderCatalog order=${order} provider=${provider.id}`);
     const resolveCatalogProviderApiKey = (providerId?: string) => {
       const resolvedProviderId = providerId?.trim() || provider.id;
       const resolved = ctx.resolveProviderApiKey(resolvedProviderId);
@@ -210,10 +236,13 @@ async function resolvePluginImplicitProviders(
       workspaceDir: ctx.workspaceDir,
       env: ctx.env,
       resolveProviderApiKey: resolveCatalogProviderApiKey,
-      resolveProviderAuth: (providerId, options) =>
+        resolveProviderAuth: (providerId, options) =>
         ctx.resolveProviderAuth(providerId?.trim() || provider.id, options),
       timeoutMs: resolveLiveProviderCatalogTimeoutMs(ctx.env),
     });
+    trace(
+      `after-runProviderCatalog order=${order} provider=${provider.id} discovered=${result ? "1" : "0"}`,
+    );
     if (!result) {
       continue;
     }
@@ -300,6 +329,7 @@ export async function resolveImplicitProviders(
   params: ImplicitProviderParams,
 ): Promise<NonNullable<OpenClawConfig["models"]>["providers"]> {
   const providers: Record<string, ProviderConfig> = {};
+  const trace = createImplicitProviderTrace();
   const env = params.env ?? process.env;
   const authStore = ensureAuthProfileStore(params.agentDir, {
     allowKeychainPrompt: false,
@@ -311,18 +341,33 @@ export async function resolveImplicitProviders(
     resolveProviderApiKey: createProviderApiKeyResolver(env, authStore, params.config),
     resolveProviderAuth: createProviderAuthResolver(env, authStore, params.config),
   };
+  const discoveryFilter = await resolveProviderDiscoveryFilter({
+    agentDir: params.agentDir,
+    config: params.config,
+    env,
+    explicitProviders: params.explicitProviders,
+    workspaceDir: params.workspaceDir,
+  });
+  if (discoveryFilter && discoveryFilter.length === 0) {
+    trace("skip-resolvePluginDiscoveryProviders empty-filter");
+    return providers;
+  }
+  trace("before-resolvePluginDiscoveryProviders");
   const discoveryProviders = await resolvePluginDiscoveryProviders({
     config: params.config,
     workspaceDir: params.workspaceDir,
     env,
-    onlyPluginIds: resolveProviderDiscoveryFilter(env),
+    onlyPluginIds: discoveryFilter,
   });
+  trace(`after-resolvePluginDiscoveryProviders providerCount=${discoveryProviders.length}`);
 
   for (const order of PLUGIN_DISCOVERY_ORDERS) {
+    trace(`before-order order=${order}`);
     mergeImplicitProviderSet(
       providers,
       await resolvePluginImplicitProviders(context, discoveryProviders, order),
     );
+    trace(`after-order order=${order} providerCount=${Object.keys(providers).length}`);
   }
 
   return providers;

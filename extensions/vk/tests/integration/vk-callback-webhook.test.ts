@@ -217,4 +217,64 @@ describe("vk callback webhook", () => {
       "webhook.accepted": 1,
     });
   });
+
+  it("keeps message_event callbacks successful when sendMessageEventAnswer fails", async () => {
+    const tracer = createVkTraceCollector();
+    const handler = createVkCallbackHandler({
+      config: createConfig(),
+      tracer,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("messages.sendMessageEventAnswer")) {
+          return new Response(
+            JSON.stringify({
+              error: {
+                error_code: 100,
+                error_msg: "invalid event_id",
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      },
+      onInteractiveEvent: async () => ({
+        eventData: {
+          type: "show_snackbar",
+          text: "Still running",
+        },
+      }),
+    });
+
+    const result = await handler({
+      method: "POST",
+      body: JSON.stringify({
+        type: "message_event",
+        group_id: 77,
+        secret: "replace-me-callback-secret",
+        event_id: "evt-interactive-failure",
+        object: {
+          user_id: 42,
+          peer_id: 2_000_000_123,
+          event_id: "callback-event-failure",
+          conversation_message_id: 18,
+          payload: '{"action":"noop"}',
+        },
+      }),
+    });
+
+    expect(result).toMatchObject({
+      statusCode: 200,
+      body: "ok",
+      eventType: "message_event",
+    });
+    expect(tracer.getCounters()).toMatchObject({
+      "interactive.answer.failed": 1,
+      "webhook.accepted": 1,
+    });
+  });
 });

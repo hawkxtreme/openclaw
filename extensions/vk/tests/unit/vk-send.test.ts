@@ -102,6 +102,82 @@ describe("vk outbound text", () => {
     );
   });
 
+  it("edits an existing VK callback message in place when cmid is provided", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+
+    const result = await sendVkText({
+      account,
+      peerId: 42,
+      text: "Updated menu",
+      keyboard: JSON.stringify({
+        inline: true,
+        buttons: [],
+      }),
+      editConversationMessageId: "72",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      },
+    });
+
+    expect(result).toMatchObject({
+      messageId: "72",
+      peerId: 42,
+      edited: true,
+    });
+    expect(requestedUrl?.pathname).toBe("/method/messages.edit");
+    expect(requestedUrl?.searchParams.get("peer_id")).toBe("42");
+    expect(requestedUrl?.searchParams.get("cmid")).toBe("72");
+    expect(requestedUrl?.searchParams.get("message")).toBe("Updated menu");
+    expect(requestedUrl?.searchParams.get("random_id")).toBeNull();
+    expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
+  });
+
+  it("falls back to sending a new message when VK cannot edit the old menu", async () => {
+    const account = createAccount();
+    const requestedUrls: URL[] = [];
+
+    const result = await sendVkText({
+      account,
+      peerId: 42,
+      text: "Updated menu",
+      editConversationMessageId: "72",
+      fetchImpl: async (input) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+        if (url.pathname === "/method/messages.edit") {
+          return new Response(
+            JSON.stringify({
+              error: {
+                error_code: 909,
+                error_msg: "too old",
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 9107,
+          }),
+        );
+      },
+    });
+
+    expect(result).toMatchObject({
+      messageId: "9107",
+      peerId: 42,
+    });
+    expect(requestedUrls).toHaveLength(2);
+    expect(requestedUrls[0]?.pathname).toBe("/method/messages.edit");
+    expect(requestedUrls[1]?.pathname).toBe("/method/messages.send");
+  });
+
   it("renders markdown text as readable plain VK text", async () => {
     const account = createAccount();
     let requestedUrl: URL | undefined;
@@ -109,9 +185,15 @@ describe("vk outbound text", () => {
     await sendVkText({
       account,
       peerId: 42,
-      text: `*Italic* **Bold**
+      text: `## Heading
+
+*Italic* **Bold**
 
 > Quote
+
+~~Gone~~
+
+||Secret||
 
 | Name | Value |
 | --- | --- |
@@ -129,20 +211,79 @@ describe("vk outbound text", () => {
     });
 
     const message = requestedUrl?.searchParams.get("message") ?? "";
+    expect(message).toContain("Heading");
     expect(message).toContain("Italic");
     expect(message).toContain("Bold");
-    expect(message).toContain("> Quote");
-    expect(message).toContain("Name: Row1, Value: A");
-    expect(message).toContain("OpenClaw (https://openclaw.ai)");
+    expect(message).toContain("[quote]Quote[/quote]");
+    expect(message).toContain("[S]Gone[/S]");
+    expect(message).toContain("[spoiler]Secret[/spoiler]");
+    expect(message).toContain("• Name: Row1");
+    expect(message).toContain("Value: A");
+    expect(message).toContain("OpenClaw");
     expect(message).not.toContain("| --- | --- |");
     expect(message).not.toContain("[I]Italic[/I]");
     expect(message).not.toContain("[B]Bold[/B]");
+    expect(message).not.toContain("OpenClaw (https://openclaw.ai)");
     expect(requestedUrl?.searchParams.get("format_data")).toBe(
       JSON.stringify({
         version: "1",
         items: [
+          { offset: message.indexOf("Heading"), length: 7, type: "bold" },
           { offset: message.indexOf("Italic"), length: 6, type: "italic" },
           { offset: message.indexOf("Bold"), length: 4, type: "bold" },
+          {
+            offset: message.indexOf("OpenClaw"),
+            length: "OpenClaw".length,
+            type: "url",
+            url: "https://openclaw.ai",
+          },
+        ],
+      }),
+    );
+  });
+
+  it("sends native VK underline and html emphasis metadata", async () => {
+    const account = createAccount();
+    let requestedUrl: URL | undefined;
+
+    await sendVkText({
+      account,
+      peerId: 42,
+      text: "<strong>BoldHtml</strong> <em>ItalicHtml</em> <u>UnderlineHtml</u> <a href=\"https://openclaw.ai\">OpenClaw</a>",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 9106,
+          }),
+        );
+      },
+    });
+
+    expect(requestedUrl?.searchParams.get("message")).toBe(
+      "BoldHtml ItalicHtml UnderlineHtml OpenClaw",
+    );
+    expect(requestedUrl?.searchParams.get("format_data")).toBe(
+      JSON.stringify({
+        version: "1",
+        items: [
+          { offset: 0, length: "BoldHtml".length, type: "bold" },
+          {
+            offset: "BoldHtml ".length,
+            length: "ItalicHtml".length,
+            type: "italic",
+          },
+          {
+            offset: "BoldHtml ItalicHtml ".length,
+            length: "UnderlineHtml".length,
+            type: "underline",
+          },
+          {
+            offset: "BoldHtml ItalicHtml UnderlineHtml ".length,
+            length: "OpenClaw".length,
+            type: "url",
+            url: "https://openclaw.ai",
+          },
         ],
       }),
     );
@@ -210,6 +351,13 @@ describe("vk outbound text", () => {
               items: [
                 { offset: 0, length: 6, type: "italic" },
                 { offset: 7, length: 4, type: "bold" },
+                { offset: 0, length: 6, type: "underline" },
+                {
+                  offset: 7,
+                  length: 4,
+                  type: "url",
+                  url: "https://openclaw.ai",
+                },
               ],
             },
             date: 1_700_000_000,
@@ -225,6 +373,8 @@ describe("vk outbound text", () => {
         items: [
           { offset: 0, length: 6, type: "italic" },
           { offset: 7, length: 4, type: "bold" },
+          { offset: 0, length: 6, type: "underline" },
+          { offset: 7, length: 4, type: "url", url: "https://openclaw.ai" },
         ],
       },
     });

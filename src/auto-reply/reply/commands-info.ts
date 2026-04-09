@@ -19,6 +19,32 @@ import { resolveReplyToMode } from "./reply-threading.js";
 export { handleContextCommand } from "./commands-context-command.js";
 export { handleWhoamiCommand } from "./commands-whoami.js";
 
+function parseCommandsPageArg(commandBodyNormalized: string):
+  | { matched: false }
+  | { matched: true; page: number }
+  | { matched: true; error: string } {
+  const normalized = commandBodyNormalized.trim();
+  if (normalized === "/commands") {
+    return { matched: true, page: 1 };
+  }
+  if (!normalized.startsWith("/commands ")) {
+    return { matched: false };
+  }
+
+  const rawArg = normalized.replace(/^\/commands\b/i, "").trim().toLowerCase();
+  if (!rawArg) {
+    return { matched: true, page: 1 };
+  }
+  const pageToken = rawArg.startsWith("page=") ? rawArg.slice("page=".length) : rawArg;
+  if (/^[0-9]+$/.test(pageToken)) {
+    const page = Number.parseInt(pageToken, 10);
+    if (Number.isFinite(page) && page > 0) {
+      return { matched: true, page };
+    }
+  }
+  return { matched: true, error: "Usage: /commands [page|page=<n>]" };
+}
+
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -42,7 +68,8 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   if (!allowTextCommands) {
     return null;
   }
-  if (params.command.commandBodyNormalized !== "/commands") {
+  const parsedPage = parseCommandsPageArg(params.command.commandBodyNormalized);
+  if (!parsedPage.matched) {
     return null;
   }
   if (!params.command.isAuthorizedSender) {
@@ -50,6 +77,12 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
       `Ignoring /commands from unauthorized sender: ${params.command.senderId || "<unknown>"}`,
     );
     return { shouldContinue: false };
+  }
+  if ("error" in parsedPage) {
+    return {
+      shouldContinue: false,
+      reply: { text: parsedPage.error },
+    };
   }
   const skillCommands =
     params.skillCommands ??
@@ -60,7 +93,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
   const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
-    page: 1,
+    page: parsedPage.page,
     surface,
   });
   const channelData = commandPlugin?.commands?.buildCommandsListChannelData?.({

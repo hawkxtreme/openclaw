@@ -10,8 +10,23 @@ WORKSPACE_DIR="${OPENCLAW_WORKSPACE_DIR:-$HOME/.openclaw/workspace}"
 PROFILE_FILE="${OPENCLAW_PROFILE_FILE:-$HOME/.profile}"
 
 PROFILE_MOUNT=()
+
+docker_host_path() {
+  local target="$1"
+  if command -v cygpath >/dev/null 2>&1; then
+    cygpath -am "$target"
+    return
+  fi
+  printf '%s\n' "$target"
+}
+
+ROOT_DIR_MOUNT="$(docker_host_path "$ROOT_DIR")"
+CONFIG_DIR_MOUNT="$(docker_host_path "$CONFIG_DIR")"
+WORKSPACE_DIR_MOUNT="$(docker_host_path "$WORKSPACE_DIR")"
+
 if [[ -f "$PROFILE_FILE" ]]; then
-  PROFILE_MOUNT=(-v "$PROFILE_FILE":/home/node/.profile:ro)
+  PROFILE_FILE_MOUNT="$(docker_host_path "$PROFILE_FILE")"
+  PROFILE_MOUNT=(-v "$PROFILE_FILE_MOUNT":/home/node/.profile:ro)
 fi
 
 AUTH_DIRS=()
@@ -58,7 +73,8 @@ if ((${#AUTH_DIRS[@]} > 0)); then
   for auth_dir in "${AUTH_DIRS[@]}"; do
     host_path="$HOME/$auth_dir"
     if [[ -d "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth/"$auth_dir":ro)
+      host_path_mount="$(docker_host_path "$host_path")"
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path_mount":/host-auth/"$auth_dir":ro)
     fi
   done
 fi
@@ -66,7 +82,8 @@ if ((${#AUTH_FILES[@]} > 0)); then
   for auth_file in "${AUTH_FILES[@]}"; do
     host_path="$HOME/$auth_file"
     if [[ -f "$host_path" ]]; then
-      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path":/host-auth-files/"$auth_file":ro)
+      host_path_mount="$(docker_host_path "$host_path")"
+      EXTERNAL_AUTH_MOUNTS+=(-v "$host_path_mount":/host-auth-files/"$auth_file":ro)
     fi
   done
 fi
@@ -114,7 +131,7 @@ echo "==> Run gateway live model tests (profile keys)"
 echo "==> Target: src/gateway/gateway-models.profiles.live.test.ts"
 echo "==> External auth dirs: ${AUTH_DIRS_CSV:-none}"
 echo "==> External auth files: ${AUTH_FILES_CSV:-none}"
-docker run --rm -t \
+MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" docker run --rm -t \
   --entrypoint bash \
   -e COREPACK_ENABLE_DOWNLOAD_PROMPT=0 \
   -e HOME=/home/node \
@@ -129,9 +146,9 @@ docker run --rm -t \
   -e OPENCLAW_LIVE_GATEWAY_MAX_MODELS="${OPENCLAW_LIVE_GATEWAY_MAX_MODELS:-8}" \
   -e OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_STEP_TIMEOUT_MS:-45000}" \
   -e OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS="${OPENCLAW_LIVE_GATEWAY_MODEL_TIMEOUT_MS:-90000}" \
-  -v "$ROOT_DIR":/src:ro \
-  -v "$CONFIG_DIR":/home/node/.openclaw \
-  -v "$WORKSPACE_DIR":/home/node/.openclaw/workspace \
+  -v "$ROOT_DIR_MOUNT":/src:ro \
+  -v "$CONFIG_DIR_MOUNT":/home/node/.openclaw \
+  -v "$WORKSPACE_DIR_MOUNT":/home/node/.openclaw/workspace \
   "${EXTERNAL_AUTH_MOUNTS[@]}" \
   "${PROFILE_MOUNT[@]}" \
   "$LIVE_IMAGE_NAME" \

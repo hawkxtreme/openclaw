@@ -5,8 +5,9 @@ import { resolveInboundDirectDmAccessWithRuntime } from "openclaw/plugin-sdk/dir
 import { dispatchInboundReplyWithBase } from "openclaw/plugin-sdk/inbound-reply-dispatch";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/core";
 import type { ResolvedVkAccount } from "./accounts.js";
-import { vkOutboundAdapter } from "./outbound.js";
-import { resolveVkInboundReplyToId } from "./reply-to.js";
+import { resolveVkSlashCommandSuggestionReply } from "./command-ui.js";
+import { sendVkResolvedOutboundPayload } from "./outbound.js";
+import { resolveVkInboundEditConversationMessageId } from "./reply-to.js";
 import { getVkRuntime } from "./runtime.js";
 import { resolveVkInboundBody } from "./text-format.js";
 import { sendVkText, sendVkTyping } from "./vk-core/outbound/send.js";
@@ -115,20 +116,17 @@ async function deliverVkReply(params: {
   accountId: string;
   to: string;
   replyToId?: string;
+  editConversationMessageId?: string;
   payload: unknown;
   statusSink?: VkInboundStatusSink;
 }) {
-  if (!vkOutboundAdapter.sendPayload) {
-    throw new Error("VK outbound adapter is not available");
-  }
-
-  await vkOutboundAdapter.sendPayload({
+  await sendVkResolvedOutboundPayload({
     cfg: params.cfg,
     to: params.to,
     accountId: params.accountId,
     replyToId: params.replyToId,
     payload: params.payload as never,
-    text: "",
+    editConversationMessageId: params.editConversationMessageId ?? null,
   });
 
   params.statusSink?.({ lastOutboundAt: Date.now() });
@@ -185,7 +183,9 @@ export async function handleVkInboundMessage(params: {
 
   traceInbound("body-ready");
   const core = getVkRuntime();
-  const replyToId = resolveVkInboundReplyToId(message);
+  const replyToId = undefined;
+  const editConversationMessageId =
+    resolveVkInboundEditConversationMessageId(message);
   statusSink?.({
     lastInboundAt: message.createdAt,
     lastEventAt: message.createdAt,
@@ -222,6 +222,20 @@ export async function handleVkInboundMessage(params: {
       log?.debug?.(
         `[${account.accountId}] dropping VK group control command from ${String(message.senderId)}`,
       );
+      return;
+    }
+
+    const groupSuggestionReply = resolveVkSlashCommandSuggestionReply(message.text);
+    if (groupSuggestionReply) {
+      await deliverVkReply({
+        cfg,
+        accountId: account.accountId,
+        to: String(message.peerId),
+        replyToId,
+        editConversationMessageId,
+        payload: groupSuggestionReply,
+        statusSink,
+      });
       return;
     }
 
@@ -290,6 +304,7 @@ export async function handleVkInboundMessage(params: {
           accountId: account.accountId,
           to: String(message.peerId),
           replyToId,
+          editConversationMessageId,
           payload,
           statusSink,
         }),
@@ -352,7 +367,6 @@ export async function handleVkInboundMessage(params: {
           account,
           peerId: message.peerId,
           text,
-          replyTo: replyToId,
         });
         statusSink?.({ lastOutboundAt: Date.now() });
       },
@@ -372,6 +386,20 @@ export async function handleVkInboundMessage(params: {
     log?.debug?.(
       `[${account.accountId}] dropping VK DM ${message.messageId} (${dmAccess.access.reason})`,
     );
+    return;
+  }
+
+  const dmSuggestionReply = resolveVkSlashCommandSuggestionReply(message.text);
+  if (dmSuggestionReply) {
+    await deliverVkReply({
+      cfg,
+      accountId: account.accountId,
+      to: String(message.peerId),
+      replyToId,
+      editConversationMessageId,
+      payload: dmSuggestionReply,
+      statusSink,
+    });
     return;
   }
 
@@ -400,6 +428,7 @@ export async function handleVkInboundMessage(params: {
           accountId: account.accountId,
           to: String(message.peerId),
           replyToId,
+          editConversationMessageId,
           payload,
           statusSink,
         }),

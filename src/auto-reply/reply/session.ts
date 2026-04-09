@@ -242,7 +242,23 @@ export async function initSessionState(params: {
   commandAuthorized: boolean;
 }): Promise<SessionInitResult> {
   const { ctx, cfg, commandAuthorized } = params;
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const logIngressTiming = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    log.info(
+      `session-init ${step} agent=${resolveSessionAgentId({
+        sessionKey: ctx.SessionKey,
+        config: cfg,
+      })} session=${ctx.SessionKey ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
+
+  logIngressTiming("start");
   const conversationBindingContext = resolveSessionConversationBindingContext(cfg, ctx);
+  logIngressTiming("binding-context");
   // Native slash commands (Telegram/Discord/Slack) are delivered on a separate
   // "slash session" key, but should mutate the target chat session.
   const commandTargetSessionKey =
@@ -270,7 +286,7 @@ export async function initSessionState(params: {
   const parentForkMaxTokens = resolveParentForkMaxTokens(cfg);
   const sessionScope = sessionCfg?.scope ?? "per-sender";
   const storePath = resolveStorePath(sessionCfg?.store, { agentId });
-  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  logIngressTiming("derived-session-identity");
 
   // CRITICAL: Skip cache to ensure fresh data when resolving session identity.
   // Stale cache (especially with multiple gateway processes or on Windows where
@@ -286,6 +302,7 @@ export async function initSessionState(params: {
         `elapsedMs=${Date.now() - sessionStoreLoadStartMs} path=${storePath}`,
     );
   }
+  logIngressTiming("store-loaded");
   let sessionKey: string | undefined;
   let sessionEntry: SessionEntry;
 
@@ -649,9 +666,11 @@ export async function initSessionState(params: {
       }
     }
   }
+  logIngressTiming("entry-prepared");
   const fallbackSessionFile = !sessionEntry.sessionFile
     ? resolveSessionTranscriptPath(sessionEntry.sessionId, agentId, ctx.MessageThreadId)
     : undefined;
+  logIngressTiming("before-resolve-session-file");
   const resolvedSessionFile = await resolveAndPersistSessionFile({
     sessionId: sessionEntry.sessionId,
     sessionKey,
@@ -663,6 +682,7 @@ export async function initSessionState(params: {
     fallbackSessionFile,
     activeSessionKey: sessionKey,
   });
+  logIngressTiming("after-resolve-session-file");
   sessionEntry = resolvedSessionFile.sessionEntry;
   if (isNewSession) {
     sessionEntry.compactionCount = 0;
@@ -681,6 +701,7 @@ export async function initSessionState(params: {
   }
   // Preserve per-session overrides while resetting compaction state on /new.
   sessionStore[sessionKey] = { ...sessionStore[sessionKey], ...sessionEntry };
+  logIngressTiming("before-update-session-store");
   await updateSessionStore(
     storePath,
     (store) => {
@@ -701,6 +722,7 @@ export async function initSessionState(params: {
         }),
     },
   );
+  logIngressTiming("after-update-session-store");
 
   // Archive old transcript so it doesn't accumulate on disk (#14869).
   let previousSessionTranscript: {
@@ -783,6 +805,7 @@ export async function initSessionState(params: {
       void hookRunner.runSessionStart(payload.event, payload.context).catch(() => {});
     }
   }
+  logIngressTiming("before-return");
 
   return {
     sessionCtx,

@@ -17,6 +17,7 @@ import { ensureAuthProfileStore } from "./auth-profiles.js";
 import { resolveProviderEnvApiKeyCandidates } from "./model-auth-env-vars.js";
 import { resolveEnvApiKey } from "./model-auth-env.js";
 import { resolvePiCredentialMapFromStore, type PiCredentialMap } from "./pi-auth-credentials.js";
+import { normalizeOptionalSecretInput } from "../utils/normalize-secret-input.js";
 
 const PiAuthStorageClass = PiCodingAgent.AuthStorage;
 const PiModelRegistryClass = PiCodingAgent.ModelRegistry;
@@ -229,10 +230,16 @@ function createAuthStorage(AuthStorageLike: unknown, path: string, creds: PiCred
 function resolvePiCredentials(agentDir: string): PiCredentialMap {
   const store = ensureAuthProfileStore(agentDir, { allowKeychainPrompt: false });
   const credentials = resolvePiCredentialMapFromStore(store);
+  const providerEnvCandidates = resolveProviderEnvApiKeyCandidates();
+  const providersWithActiveEnvCandidates = Object.entries(providerEnvCandidates)
+    .filter(([, envVars]) =>
+      envVars.some((envVar) => normalizeOptionalSecretInput(process.env[envVar]) !== undefined),
+    )
+    .map(([provider]) => provider);
   // pi-coding-agent hides providers from its registry when auth storage lacks
   // a matching credential entry. Mirror env-backed provider auth here so
   // live/model discovery sees the same providers runtime auth can use.
-  for (const provider of Object.keys(resolveProviderEnvApiKeyCandidates())) {
+  for (const provider of providersWithActiveEnvCandidates) {
     if (credentials[provider]) {
       continue;
     }

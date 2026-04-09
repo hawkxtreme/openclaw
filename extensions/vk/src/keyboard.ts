@@ -20,12 +20,22 @@ export type VkReplyButton = {
 
 export type VkReplyButtons = ReadonlyArray<ReadonlyArray<VkReplyButton>>;
 
+export type VkKeyboardSpec = {
+  buttons: VkReplyButtons;
+  inline?: boolean;
+  oneTime?: boolean;
+};
+
 function readTrimmedString(value: unknown): string | undefined {
   if (typeof value !== "string") {
     return undefined;
   }
   const trimmed = value.trim();
   return trimmed || undefined;
+}
+
+function readBoolean(value: unknown): boolean | undefined {
+  return typeof value === "boolean" ? value : undefined;
 }
 
 function truncateLabel(value: string): string {
@@ -154,7 +164,7 @@ export function buildVkButtonsFromInteractive(interactive: unknown): VkReplyButt
   return rows.length > 0 ? rows.slice(0, MAX_KEYBOARD_ROWS) : undefined;
 }
 
-export function resolveVkButtonsFromPayload(payload: unknown): VkReplyButtons | undefined {
+export function resolveVkKeyboardSpecFromPayload(payload: unknown): VkKeyboardSpec | undefined {
   if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
     return undefined;
   }
@@ -169,7 +179,16 @@ export function resolveVkButtonsFromPayload(payload: unknown): VkReplyButtons | 
       ? (channelData.vk as Record<string, unknown>)
       : undefined;
 
-  return normalizeVkButtons(vkData?.buttons) ?? buildVkButtonsFromInteractive(record.interactive);
+  const buttons = normalizeVkButtons(vkData?.buttons) ?? buildVkButtonsFromInteractive(record.interactive);
+  if (!buttons) {
+    return undefined;
+  }
+
+  return {
+    buttons,
+    inline: readBoolean(vkData?.inline),
+    oneTime: readBoolean(vkData?.one_time) ?? readBoolean(vkData?.oneTime),
+  };
 }
 
 function toVkColor(style?: VkButtonStyle): "primary" | "secondary" | "positive" | "negative" {
@@ -182,12 +201,17 @@ function toVkColor(style?: VkButtonStyle): "primary" | "secondary" | "positive" 
   return style === "primary" ? "primary" : "secondary";
 }
 
-export function buildVkKeyboard(buttons?: VkReplyButtons): string | undefined {
-  if (!buttons || buttons.length === 0) {
+export function buildVkKeyboard(
+  spec?: VkKeyboardSpec,
+  transport: "callback-api" | "long-poll" = "callback-api",
+): string | undefined {
+  if (!spec?.buttons || spec.buttons.length === 0) {
     return undefined;
   }
 
-  const rows = buttons
+  const useInlineCallback = spec.inline === true && transport === "callback-api";
+
+  const rows = spec.buttons
     .slice(0, MAX_KEYBOARD_ROWS)
     .map((row) =>
       row
@@ -200,7 +224,7 @@ export function buildVkKeyboard(buttons?: VkReplyButtons): string | undefined {
           return [
             {
               action: {
-                type: "text" as const,
+                type: useInlineCallback ? ("callback" as const) : ("text" as const),
                 label: truncateLabel(button.text),
                 payload,
               },
@@ -213,7 +237,8 @@ export function buildVkKeyboard(buttons?: VkReplyButtons): string | undefined {
 
   return rows.length > 0
     ? JSON.stringify({
-        one_time: true,
+        ...(useInlineCallback ? { inline: true } : {}),
+        one_time: spec.oneTime ?? false,
         buttons: rows,
       })
     : undefined;

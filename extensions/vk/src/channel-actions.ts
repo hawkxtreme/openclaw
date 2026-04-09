@@ -9,7 +9,7 @@ import type {
 } from "openclaw/plugin-sdk/channel-contract";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { hasVkCredentials, resolveVkAccount } from "./accounts.js";
-import { buildVkKeyboard, normalizeVkButtons, resolveVkButtonsFromPayload } from "./keyboard.js";
+import { buildVkKeyboard, normalizeVkButtons, resolveVkKeyboardSpecFromPayload } from "./keyboard.js";
 import { normalizeVkTarget } from "./outbound.js";
 import { sendVkPayload } from "./vk-core/outbound/media.js";
 
@@ -80,7 +80,10 @@ export const vkMessageActions: ChannelMessageActionAdapter = {
 
     const payload = buildVkActionPayload(params);
     const parts = resolveSendableOutboundReplyParts(payload);
-    const keyboard = buildVkKeyboard(resolveVkButtonsFromPayload(payload));
+    const keyboard = buildVkKeyboard(
+      resolveVkKeyboardSpecFromPayload(payload),
+      account.config.transport,
+    );
     const replyTo =
       readStringParam(params, "replyTo") ?? readStringParam(params, "replyToId") ?? undefined;
     const result = await sendVkPayload({

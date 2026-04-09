@@ -10,6 +10,7 @@ const createWebhookInFlightLimiterMock = vi.hoisted(() => vi.fn(() => ({ release
 const handleVkInboundMessageMock = vi.hoisted(() => vi.fn());
 const readWebhookBodyOrRejectMock = vi.hoisted(() => vi.fn());
 const registerPluginHttpRouteMock = vi.hoisted(() => vi.fn());
+const resolveLatestVkInteractiveMenuIdMock = vi.hoisted(() => vi.fn());
 
 vi.mock("openclaw/plugin-sdk/webhook-ingress", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/webhook-ingress")>();
@@ -27,6 +28,14 @@ vi.mock("../../src/inbound.js", async (importOriginal) => {
   return {
     ...actual,
     handleVkInboundMessage: handleVkInboundMessageMock,
+  };
+});
+
+vi.mock("../../src/interactive-menu.ts", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../src/interactive-menu.js")>();
+  return {
+    ...actual,
+    resolveLatestVkInteractiveMenuId: resolveLatestVkInteractiveMenuIdMock,
   };
 });
 
@@ -53,6 +62,8 @@ describe("vk gateway adapter", () => {
     registerPluginHttpRouteMock.mockReset();
     readWebhookBodyOrRejectMock.mockReset();
     beginWebhookRequestPipelineOrRejectMock.mockClear();
+    resolveLatestVkInteractiveMenuIdMock.mockReset();
+    resolveLatestVkInteractiveMenuIdMock.mockResolvedValue(undefined);
   });
 
   afterEach(() => {

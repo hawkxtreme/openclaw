@@ -33,6 +33,12 @@ const mocks = vi.hoisted(() => ({
     aborted: false,
   })),
 }));
+const routeReplyRuntimeMocks = vi.hoisted(() => ({
+  moduleLoads: vi.fn(),
+}));
+const abortRuntimeMocks = vi.hoisted(() => ({
+  moduleLoads: vi.fn(),
+}));
 const diagnosticMocks = vi.hoisted(() => ({
   logMessageQueued: vi.fn(),
   logMessageProcessed: vi.fn(),
@@ -139,6 +145,12 @@ const ttsMocks = vi.hoisted(() => {
       typeof value === "string" ? value : undefined,
     ),
     resolveTtsConfig: vi.fn((_cfg: OpenClawConfig) => ({ mode: "final" })),
+    resolveStatusTtsSnapshot: vi.fn(() => ({
+      autoMode: "always" as const,
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
+    })),
   };
 });
 const threadInfoMocks = vi.hoisted(() => ({
@@ -175,6 +187,7 @@ function parseGenericThreadSessionInfo(sessionKey: string | undefined) {
 }
 
 vi.mock("./route-reply.runtime.js", () => ({
+  ...(routeReplyRuntimeMocks.moduleLoads(), {}),
   isRoutableChannel: (channel: string | undefined) =>
     Boolean(
       channel &&
@@ -211,6 +224,7 @@ vi.mock("./route-reply.js", () => ({
 }));
 
 vi.mock("./abort.runtime.js", () => ({
+  ...(abortRuntimeMocks.moduleLoads(), {}),
   tryFastAbortFromMessage: mocks.tryFastAbortFromMessage,
   formatAbortReplyText: (stoppedSubagents?: number) => {
     if (typeof stoppedSubagents !== "number" || stoppedSubagents <= 0) {
@@ -323,12 +337,7 @@ vi.mock("../../tts/tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
 }));
 vi.mock("../../tts/status-config.js", () => ({
-  resolveStatusTtsSnapshot: () => ({
-    autoMode: "always",
-    provider: "auto",
-    maxLength: 1500,
-    summarize: true,
-  }),
+  resolveStatusTtsSnapshot: (params: unknown) => ttsMocks.resolveStatusTtsSnapshot(params),
 }));
 vi.mock("./dispatch-acp-tts.runtime.js", () => ({
   maybeApplyTtsToPayload: (params: unknown) => ttsMocks.maybeApplyTtsToPayload(params),
@@ -631,12 +640,21 @@ describe("dispatchReplyFromConfig", () => {
     sessionStoreMocks.resolveSessionStoreEntry.mockClear();
     threadInfoMocks.parseSessionThreadInfo.mockReset();
     threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);
+    routeReplyRuntimeMocks.moduleLoads.mockClear();
+    abortRuntimeMocks.moduleLoads.mockClear();
     ttsMocks.state.synthesizeFinalAudio = false;
     ttsMocks.maybeApplyTtsToPayload.mockClear();
     ttsMocks.normalizeTtsAutoMode.mockClear();
     ttsMocks.resolveTtsConfig.mockClear();
+    ttsMocks.resolveStatusTtsSnapshot.mockClear();
     ttsMocks.resolveTtsConfig.mockReturnValue({
       mode: "final",
+    });
+    ttsMocks.resolveStatusTtsSnapshot.mockReturnValue({
+      autoMode: "always",
+      provider: "auto",
+      maxLength: 1500,
+      summarize: true,
     });
   });
   it("does not route when Provider matches OriginatingChannel (even if Surface is missing)", async () => {
@@ -660,6 +678,42 @@ describe("dispatchReplyFromConfig", () => {
 
     expect(mocks.routeReply).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not load route-reply runtime when no originating route is needed", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "vk",
+      Surface: "vk",
+      OriginatingChannel: "vk",
+      OriginatingTo: "vk:peer:123",
+    });
+    const replyResolver = async () => ({ text: "hi" } satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(routeReplyRuntimeMocks.moduleLoads).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
+  });
+
+  it("does not load abort runtime for direct non-abort text", async () => {
+    setNoAbort();
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({
+      Provider: "vk",
+      Surface: "vk",
+      ChatType: "direct",
+      Body: "hello there",
+      RawBody: "hello there",
+      CommandBody: "hello there",
+    });
+    const replyResolver = async () => ({ text: "hi" } satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(abortRuntimeMocks.moduleLoads).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
   });
 
   it("routes when OriginatingChannel differs from Provider", async () => {
@@ -2913,6 +2967,19 @@ describe("dispatchReplyFromConfig", () => {
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
 
     expect(receivedCfg).toBeUndefined();
+  });
+
+  it("skips TTS runtime when effective TTS state is off", async () => {
+    setNoAbort();
+    ttsMocks.resolveStatusTtsSnapshot.mockReturnValue(null);
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx({ Provider: "vk", Surface: "vk" });
+    const replyResolver = async () => ({ text: "hi" } satisfies ReplyPayload);
+
+    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+    expect(ttsMocks.maybeApplyTtsToPayload).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "hi" });
   });
 
   it("suppresses isReasoning payloads from final replies (WhatsApp channel)", async () => {

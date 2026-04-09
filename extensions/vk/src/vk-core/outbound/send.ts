@@ -1,8 +1,11 @@
 import { randomInt } from "node:crypto";
 
-import { resolveVkInboundReplyToId } from "../../reply-to.js";
+import {
+  normalizeVkConversationMessageId,
+  resolveVkInboundReplyToId,
+} from "../../reply-to.js";
 import { formatVkOutboundMessage } from "../../text-format.js";
-import { sendVkMessage, setVkMessageActivity } from "../core/api.js";
+import { editVkMessage, sendVkMessage, setVkMessageActivity, VkApiError } from "../core/api.js";
 import type { ResolvedVkAccount } from "../types/config.js";
 import type { VkInboundMessage } from "../types/longpoll.js";
 
@@ -14,6 +17,7 @@ export type VkSendTextOptions = {
   text: string;
   keyboard?: string;
   replyTo?: string | number;
+  editConversationMessageId?: string | number;
   randomId?: number;
   dedupeKey?: string;
   disableMentions?: boolean;
@@ -33,6 +37,7 @@ export type VkSendTextResult = {
   messageId: string;
   peerId: number;
   randomId: number;
+  edited?: boolean;
 };
 
 function normalizePositiveInteger(
@@ -115,6 +120,8 @@ function normalizeVkReplyTo(
   return normalizePositiveInteger(value, "Invalid VK reply_to");
 }
 
+const VK_EDIT_FALLBACK_CODES = new Set([909, 920]);
+
 export async function sendVkText(
   options: VkSendTextOptions,
 ): Promise<VkSendTextResult> {
@@ -129,10 +136,44 @@ export async function sendVkText(
 
   const peerId = normalizeVkPeerId(options.peerId);
   const replyTo = normalizeVkReplyTo(options.replyTo);
+  const editConversationMessageId = normalizeVkConversationMessageId(
+    options.editConversationMessageId,
+  );
   const randomId = resolveVkRandomId({
     dedupeKey: options.dedupeKey,
     randomId: options.randomId,
   });
+  if (editConversationMessageId) {
+    try {
+      await editVkMessage({
+        token: options.account.token,
+        peerId,
+        conversationMessageId: editConversationMessageId,
+        message: formatted.text,
+        formatData: formatted.formatData,
+        keyboard: options.keyboard,
+        disableMentions: options.disableMentions,
+        dontParseLinks: options.dontParseLinks,
+        apiVersion: options.account.config.apiVersion,
+        signal: options.signal,
+        fetchImpl: options.fetchImpl,
+      });
+      return {
+        messageId: editConversationMessageId,
+        peerId,
+        randomId,
+        edited: true,
+      };
+    } catch (error) {
+      if (
+        !(error instanceof VkApiError) ||
+        !VK_EDIT_FALLBACK_CODES.has(error.code)
+      ) {
+        throw error;
+      }
+    }
+  }
+
   const messageId = await sendVkMessage({
     token: options.account.token,
     peerId,

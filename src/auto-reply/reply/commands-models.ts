@@ -17,6 +17,7 @@ import type { CommandHandler } from "./commands-types.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
+const PROVIDER_PAGE_SIZE_DEFAULT = 8;
 
 export type ModelsProviderData = {
   byProvider: Map<string, Set<string>>;
@@ -143,11 +144,23 @@ function parseModelsArgs(raw: string): {
   }
 
   const tokens = trimmed.split(/\s+/g).filter(Boolean);
-  const provider = tokens[0]?.trim();
+  const firstToken = tokens[0]?.trim();
+  const firstLower = firstToken?.toLowerCase();
+  const provider =
+    firstToken &&
+    firstLower !== "all" &&
+    firstLower !== "--all" &&
+    !firstLower?.startsWith("page=") &&
+    !firstLower?.startsWith("limit=") &&
+    !firstLower?.startsWith("size=") &&
+    !/^[0-9]+$/.test(firstToken)
+      ? normalizeProviderId(firstToken)
+      : undefined;
+  const optionTokens = provider ? tokens.slice(1) : tokens;
 
   let page = 1;
   let all = false;
-  for (const token of tokens.slice(1)) {
+  for (const token of optionTokens) {
     const lower = token.toLowerCase();
     if (lower === "all" || lower === "--all") {
       all = true;
@@ -169,7 +182,7 @@ function parseModelsArgs(raw: string): {
   }
 
   let pageSize = PAGE_SIZE_DEFAULT;
-  for (const token of tokens) {
+  for (const token of optionTokens) {
     const lower = token.toLowerCase();
     if (lower.startsWith("limit=") || lower.startsWith("size=")) {
       const rawValue = lower.slice(lower.indexOf("=") + 1);
@@ -251,25 +264,55 @@ export async function resolveModelsCommandReply(params: {
       id: p,
       count: byProvider.get(p)?.size ?? 0,
     }));
+    const providerPageCount = Math.max(
+      1,
+      Math.ceil(providerInfos.length / PROVIDER_PAGE_SIZE_DEFAULT),
+    );
+    const safeProviderPage = Math.max(1, Math.min(page, providerPageCount));
+    if (page !== safeProviderPage) {
+      return {
+        text: [
+          `Page out of range: ${page} (valid: 1-${providerPageCount})`,
+          "",
+          `Try: /models ${safeProviderPage}`,
+        ].join("\n"),
+      };
+    }
+    const providerPageStart = (safeProviderPage - 1) * PROVIDER_PAGE_SIZE_DEFAULT;
+    const providerPageEntries = providerInfos.slice(
+      providerPageStart,
+      providerPageStart + PROVIDER_PAGE_SIZE_DEFAULT,
+    );
     const channelData = commandPlugin?.commands?.buildModelsProviderChannelData?.({
-      providers: providerInfos,
+      providers: providerPageEntries,
+      currentPage: safeProviderPage,
+      totalPages: providerPageCount,
     });
     if (channelData) {
       return {
-        text: "Select a provider:",
+        text:
+          providerPageCount > 1
+            ? `Select a provider (${safeProviderPage}/${providerPageCount}):`
+            : "Select a provider:",
         channelData,
       };
     }
 
+    const pageProviders = providerPageEntries.map((entry) =>
+      formatProviderLine({ provider: entry.id, count: entry.count }),
+    );
     const lines: string[] = [
-      "Providers:",
-      ...providers.map((p) =>
-        formatProviderLine({ provider: p, count: byProvider.get(p)?.size ?? 0 }),
-      ),
+      providerPageCount > 1
+        ? `Providers (page ${safeProviderPage}/${providerPageCount}):`
+        : "Providers:",
+      ...pageProviders,
       "",
       "Use: /models <provider>",
       "Switch: /model <provider/model>",
     ];
+    if (safeProviderPage < providerPageCount) {
+      lines.push(`More: /models ${safeProviderPage + 1}`);
+    }
     return { text: lines.join("\n") };
   }
 
@@ -304,7 +347,7 @@ export async function resolveModelsCommandReply(params: {
     return { text: lines.join("\n") };
   }
 
-  const interactivePageSize = 8;
+  const interactivePageSize = 6;
   const interactiveTotalPages = Math.max(1, Math.ceil(total / interactivePageSize));
   const interactivePage = Math.max(1, Math.min(page, interactiveTotalPages));
   const interactiveChannelData = commandPlugin?.commands?.buildModelsListChannelData?.({
@@ -317,13 +360,17 @@ export async function resolveModelsCommandReply(params: {
     modelNames,
   });
   if (interactiveChannelData) {
-    const text = formatModelsAvailableHeader({
+    const header = formatModelsAvailableHeader({
       provider,
       total,
       cfg: params.cfg,
       agentDir: params.agentDir,
       sessionEntry: params.sessionEntry,
     });
+    const text =
+      interactiveTotalPages > 1
+        ? `${header} (page ${interactivePage}/${interactiveTotalPages})`
+        : header;
     return {
       text,
       channelData: interactiveChannelData,

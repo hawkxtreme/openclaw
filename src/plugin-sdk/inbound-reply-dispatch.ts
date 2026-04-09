@@ -6,6 +6,7 @@ import {
 import type { ReplyDispatcher } from "../auto-reply/reply/reply-dispatcher.js";
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { GetReplyOptions } from "../auto-reply/types.js";
+import type { TypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { createChannelReplyPipeline } from "./channel-reply-pipeline.js";
 import { createNormalizedOutboundDeliverer, type OutboundReplyPayload } from "./reply-payload.js";
@@ -90,6 +91,7 @@ export async function dispatchInboundReplyWithBase(
     Pick<
       RecordInboundSessionAndDispatchReplyParams,
       "deliver" | "onRecordError" | "onDispatchError" | "replyOptions"
+      | "typingCallbacks"
     >,
 ): Promise<void> {
   const dispatchBase = buildInboundReplyDispatchBase(params);
@@ -99,6 +101,7 @@ export async function dispatchInboundReplyWithBase(
     onRecordError: params.onRecordError,
     onDispatchError: params.onDispatchError,
     replyOptions: params.replyOptions,
+    typingCallbacks: params.typingCallbacks,
   });
 }
 
@@ -117,22 +120,37 @@ export async function recordInboundSessionAndDispatchReply(params: {
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
   replyOptions?: ReplyOptionsWithoutModelSelected;
+  typingCallbacks?: TypingCallbacks;
 }): Promise<void> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const trace = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[inbound-reply-dispatch] ${step} channel=${params.channel} agent=${params.agentId} session=${params.ctxPayload.SessionKey ?? params.routeSessionKey}`,
+    );
+  };
+
+  trace("before-recordInboundSession");
   await params.recordInboundSession({
     storePath: params.storePath,
     sessionKey: params.ctxPayload.SessionKey ?? params.routeSessionKey,
     ctx: params.ctxPayload,
     onRecordError: params.onRecordError,
   });
+  trace("after-recordInboundSession");
 
   const { onModelSelected, ...replyPipeline } = createChannelReplyPipeline({
     cfg: params.cfg,
     agentId: params.agentId,
     channel: params.channel,
     accountId: params.accountId,
+    typingCallbacks: params.typingCallbacks,
   });
   const deliver = createNormalizedOutboundDeliverer(params.deliver);
 
+  trace("before-dispatchReplyWithBufferedBlockDispatcher");
   await params.dispatchReplyWithBufferedBlockDispatcher({
     ctx: params.ctxPayload,
     cfg: params.cfg,
@@ -146,4 +164,5 @@ export async function recordInboundSessionAndDispatchReply(params: {
       onModelSelected,
     },
   });
+  trace("after-dispatchReplyWithBufferedBlockDispatcher");
 }

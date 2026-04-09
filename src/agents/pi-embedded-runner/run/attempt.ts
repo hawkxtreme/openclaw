@@ -317,6 +317,16 @@ function summarizeSessionContext(messages: AgentMessage[]): {
 export async function runEmbeddedAttempt(
   params: EmbeddedRunAttemptParams,
 ): Promise<EmbeddedRunAttemptResult> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[run-embedded-attempt] ${step} session=${params.sessionKey ?? params.sessionId ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
   const resolvedWorkspace = resolveUserPath(params.workspaceDir);
   const runAbortController = new AbortController();
   // Proxy bootstrap must happen before timeout tuning so the timeouts wrap the
@@ -330,12 +340,14 @@ export async function runEmbeddedAttempt(
 
   await fs.mkdir(resolvedWorkspace, { recursive: true });
 
+  traceIngress("before-resolveSandboxContext");
   const sandboxSessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandbox = await resolveSandboxContext({
     config: params.config,
     sessionKey: sandboxSessionKey,
     workspaceDir: resolvedWorkspace,
   });
+  traceIngress("after-resolveSandboxContext");
   const effectiveWorkspace = sandbox?.enabled
     ? sandbox.workspaceAccess === "rw"
       ? resolvedWorkspace
@@ -372,8 +384,9 @@ export async function runEmbeddedAttempt(
       config: params.config,
       workspaceDir: effectiveWorkspace,
       agentId: sessionAgentId,
-    });
+        });
 
+    traceIngress("before-resolveBootstrapContextForRun");
     const sessionLock = await acquireSessionWriteLock({
       sessionFile: params.sessionFile,
       maxHoldMs: resolveSessionLockMaxHoldFromTimeout({
@@ -408,6 +421,7 @@ export async function runEmbeddedAttempt(
           contextMode: params.bootstrapContextMode,
           runKind: params.bootstrapContextRunKind,
         });
+    traceIngress("after-resolveBootstrapContextForRun");
     const bootstrapMaxChars = resolveBootstrapMaxChars(params.config);
     const bootstrapTotalMaxChars = resolveBootstrapTotalMaxChars(params.config);
     const bootstrapAnalysis = analyzeBootstrapBudget({
@@ -518,6 +532,7 @@ export async function runEmbeddedAttempt(
           }
           return allTools;
         })();
+    traceIngress("after-createOpenClawCodingTools");
     const toolsEnabled = supportsModelTools(params.model);
     const tools = normalizeProviderToolSchemas({
       tools: toolsEnabled ? toolsRaw : [],
@@ -529,7 +544,9 @@ export async function runEmbeddedAttempt(
       modelApi: params.model.api,
       model: params.model,
     });
+    traceIngress("after-normalizeProviderToolSchemas");
     const clientTools = toolsEnabled ? params.clientTools : undefined;
+    traceIngress("before-getOrCreateSessionMcpRuntime");
     const bundleMcpSessionRuntime = toolsEnabled
       ? await getOrCreateSessionMcpRuntime({
           sessionId: params.sessionId,
@@ -538,6 +555,8 @@ export async function runEmbeddedAttempt(
           cfg: params.config,
         })
       : undefined;
+    traceIngress("after-getOrCreateSessionMcpRuntime");
+    traceIngress("before-materializeBundleMcpToolsForRun");
     const bundleMcpRuntime = bundleMcpSessionRuntime
       ? await materializeBundleMcpToolsForRun({
           runtime: bundleMcpSessionRuntime,
@@ -547,6 +566,8 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
+    traceIngress("after-materializeBundleMcpToolsForRun");
+    traceIngress("before-createBundleLspToolRuntime");
     const bundleLspRuntime = toolsEnabled
       ? await createBundleLspToolRuntime({
           workspaceDir: effectiveWorkspace,
@@ -558,6 +579,7 @@ export async function runEmbeddedAttempt(
           ],
         })
       : undefined;
+    traceIngress("after-createBundleLspToolRuntime");
     const effectiveTools = [
       ...tools,
       ...(bundleMcpRuntime?.tools ?? []),
@@ -686,6 +708,7 @@ export async function runEmbeddedAttempt(
       cwd: effectiveWorkspace,
       moduleUrl: import.meta.url,
     });
+    traceIngress("after-resolveOpenClawDocsPath");
     const ttsHint = params.config ? buildTtsSystemPromptHint(params.config) : undefined;
     const ownerDisplay = resolveOwnerDisplaySetting(params.config);
     const heartbeatPrompt = shouldInjectHeartbeatPrompt({
@@ -779,6 +802,7 @@ export async function runEmbeddedAttempt(
         sessionFile: params.sessionFile,
         warn: (message) => log.warn(message),
       });
+      traceIngress("after-repairSessionFileIfNeeded");
       const hadSessionFile = await fs
         .stat(params.sessionFile)
         .then(() => true)
@@ -795,6 +819,7 @@ export async function runEmbeddedAttempt(
       });
 
       await prewarmSessionFile(params.sessionFile);
+      traceIngress("after-prewarmSessionFile");
       sessionManager = guardSessionManager(SessionManager.open(params.sessionFile), {
         agentId: sessionAgentId,
         sessionKey: params.sessionKey,
@@ -828,6 +853,7 @@ export async function runEmbeddedAttempt(
           }),
         warn: (message) => log.warn(message),
       });
+      traceIngress("after-runAttemptContextEngineBootstrap");
 
       await prepareSessionManagerForRun({
         sessionManager,
@@ -836,6 +862,7 @@ export async function runEmbeddedAttempt(
         sessionId: params.sessionId,
         cwd: effectiveWorkspace,
       });
+      traceIngress("after-prepareSessionManagerForRun");
 
       const settingsManager = createPreparedEmbeddedPiSettingsManager({
         cwd: effectiveWorkspace,
@@ -868,6 +895,7 @@ export async function runEmbeddedAttempt(
         });
         await resourceLoader.reload();
       }
+      traceIngress("after-resourceLoaderReload");
 
       // Get hook runner early so it's available when creating tools
       const hookRunner = getGlobalHookRunner();
@@ -914,6 +942,7 @@ export async function runEmbeddedAttempt(
         settingsManager,
         resourceLoader,
       }));
+      traceIngress("after-createAgentSession");
       applySystemPromptOverrideToSession(session, systemPromptText);
       if (!session) {
         throw new Error("Embedded agent session missing");
@@ -1620,9 +1649,9 @@ export async function runEmbeddedAttempt(
           });
         }
 
-        const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
-          apiKey: await resolveEmbeddedAgentApiKey({
-            provider: params.provider,
+      const googlePromptCacheStreamFn = await prepareGooglePromptCacheStreamFn({
+        apiKey: await resolveEmbeddedAgentApiKey({
+          provider: params.provider,
             resolvedApiKey: params.resolvedApiKey,
             authStorage: params.authStorage,
           }),
@@ -1635,9 +1664,10 @@ export async function runEmbeddedAttempt(
           streamFn: activeSession.agent.streamFn,
           systemPrompt: systemPromptText,
         });
-        if (googlePromptCacheStreamFn) {
-          activeSession.agent.streamFn = googlePromptCacheStreamFn;
-        }
+      if (googlePromptCacheStreamFn) {
+        activeSession.agent.streamFn = googlePromptCacheStreamFn;
+      }
+      traceIngress("after-prepareGooglePromptCacheStreamFn");
 
         log.debug(`embedded run prompt start: runId=${params.runId} sessionId=${params.sessionId}`);
         cacheTrace?.recordStage("prompt:before", {
@@ -1707,6 +1737,7 @@ export async function runEmbeddedAttempt(
                 ? { root: sandbox.workspaceDir, bridge: sandbox.fsBridge }
                 : undefined,
           });
+          traceIngress("after-detectAndLoadPromptImages");
 
           cacheTrace?.recordStage("prompt:images", {
             prompt: effectivePrompt,
@@ -1771,10 +1802,13 @@ export async function runEmbeddedAttempt(
           // Only pass images option if there are actually images to pass
           // This avoids potential issues with models that don't expect the images parameter
           if (imageResult.images.length > 0) {
+            traceIngress("before-activeSessionPrompt");
             await abortable(activeSession.prompt(effectivePrompt, { images: imageResult.images }));
           } else {
+            traceIngress("before-activeSessionPrompt");
             await abortable(activeSession.prompt(effectivePrompt));
           }
+          traceIngress("after-activeSessionPrompt");
         } catch (err) {
           // Yield-triggered abort is intentional — treat as clean stop, not error.
           // Check the abort reason to distinguish from external aborts (timeout, user cancel)

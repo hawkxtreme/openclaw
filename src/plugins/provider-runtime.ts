@@ -64,6 +64,13 @@ function matchesProviderId(provider: ProviderPlugin, providerId: string): boolea
   );
 }
 
+function tokenizeProviderLookup(value: string): string[] {
+  return normalizeProviderId(value)
+    .split(/[^a-z0-9]+/u)
+    .map((token) => token.trim())
+    .filter(Boolean);
+}
+
 let cachedHookProvidersWithoutConfig = new WeakMap<
   NodeJS.ProcessEnv,
   Map<string, ProviderPlugin[]>
@@ -376,6 +383,44 @@ function resolveProviderHookPlugin(params: {
   );
 }
 
+function resolveProviderHookAliasCandidates(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin[] {
+  const providerTokens = new Set(tokenizeProviderLookup(params.provider));
+  if (providerTokens.size === 0) {
+    return [];
+  }
+  const workspaceDir = params.workspaceDir ?? getActivePluginRegistryWorkspaceDirFromState();
+  const candidatePluginIds = resolveCatalogHookProviderPluginIds({
+    config: params.config,
+    workspaceDir,
+    env: params.env,
+  }).filter((pluginId) => tokenizeProviderLookup(pluginId).some((token) => providerTokens.has(token)));
+  if (candidatePluginIds.length === 0) {
+    return [];
+  }
+  return resolveProviderPluginsForHooks({
+    config: params.config,
+    workspaceDir,
+    env: params.env,
+    onlyPluginIds: candidatePluginIds,
+  });
+}
+
+function resolveProviderHookPluginFromAliasCandidates(params: {
+  provider: string;
+  config?: OpenClawConfig;
+  workspaceDir?: string;
+  env?: NodeJS.ProcessEnv;
+}): ProviderPlugin | undefined {
+  return resolveProviderHookAliasCandidates(params).find((candidate) =>
+    matchesProviderId(candidate, params.provider),
+  );
+}
+
 export function normalizeProviderModelIdWithPlugin(params: {
   provider: string;
   config?: OpenClawConfig;
@@ -427,13 +472,15 @@ export function normalizeProviderConfigWithPlugin(params: {
 }): ModelProviderConfig | undefined {
   const hasConfigChange = (normalized: ModelProviderConfig) =>
     normalized !== params.context.providerConfig;
-  const matchedPlugin = resolveProviderHookPlugin(params);
+  const matchedPlugin =
+    resolveProviderRuntimePlugin(params) ?? resolveProviderHookPluginFromAliasCandidates(params);
   const normalizedMatched = matchedPlugin?.normalizeConfig?.(params.context);
   if (normalizedMatched && hasConfigChange(normalizedMatched)) {
     return normalizedMatched;
   }
 
-  for (const candidate of resolveProviderPluginsForHooks(params)) {
+  const fallbackCandidates = resolveProviderHookAliasCandidates(params);
+  for (const candidate of fallbackCandidates) {
     if (!candidate.normalizeConfig || candidate === matchedPlugin) {
       continue;
     }
@@ -454,8 +501,9 @@ export function applyProviderNativeStreamingUsageCompatWithPlugin(params: {
   context: ProviderNormalizeConfigContext;
 }): ModelProviderConfig | undefined {
   return (
-    resolveProviderHookPlugin(params)?.applyNativeStreamingUsageCompat?.(params.context) ??
-    undefined
+    (
+      resolveProviderRuntimePlugin(params) ?? resolveProviderHookPluginFromAliasCandidates(params)
+    )?.applyNativeStreamingUsageCompat?.(params.context) ?? undefined
   );
 }
 
@@ -528,8 +576,24 @@ export function resolveProviderReasoningOutputModeWithPlugin(params: {
   env?: NodeJS.ProcessEnv;
   context: ProviderReasoningOutputModeContext;
 }): ProviderReasoningOutputMode | undefined {
-  const mode = resolveProviderHookPlugin(params)?.resolveReasoningOutputMode?.(params.context);
-  return mode === "native" || mode === "tagged" ? mode : undefined;
+  const matchedPlugin =
+    resolveProviderRuntimePlugin(params) ?? resolveProviderHookPluginFromAliasCandidates(params);
+  const matchedMode = matchedPlugin?.resolveReasoningOutputMode?.(params.context);
+  if (matchedMode === "native" || matchedMode === "tagged") {
+    return matchedMode;
+  }
+
+  for (const candidate of resolveProviderHookAliasCandidates(params)) {
+    if (!candidate.resolveReasoningOutputMode || candidate === matchedPlugin) {
+      continue;
+    }
+    const mode = candidate.resolveReasoningOutputMode(params.context);
+    if (mode === "native" || mode === "tagged") {
+      return mode;
+    }
+  }
+
+  return undefined;
 }
 
 export function prepareProviderExtraParams(params: {

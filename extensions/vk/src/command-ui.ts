@@ -1,14 +1,41 @@
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
-import type { VkReplyButton, VkReplyButtons } from "./keyboard.js";
+import type { VkKeyboardSpec, VkReplyButton, VkReplyButtons } from "./keyboard.js";
 
 type ProviderInfo = {
   id: string;
   count: number;
 };
 
-const MODELS_PAGE_SIZE = 8;
+type VkCommandSuggestion = {
+  label: string;
+  command: string;
+};
+
+const MODELS_PAGE_SIZE = 6;
+const PROVIDERS_PAGE_SIZE = 8;
 const PROVIDERS_PER_ROW = 2;
+const MODELS_PER_ROW = 2;
 const MAX_MODEL_LABEL_CHARS = 36;
+const COMMAND_SUGGESTIONS_PER_ROW = 2;
+const VK_PRIMARY_COMMAND_SUGGESTIONS: readonly VkCommandSuggestion[] = [
+  { label: "Commands", command: "/commands" },
+  { label: "Help", command: "/help" },
+  { label: "New", command: "/new" },
+  { label: "Reset", command: "/reset" },
+  { label: "Model", command: "/model" },
+  { label: "Models", command: "/models" },
+  { label: "Status", command: "/status" },
+  { label: "Tools", command: "/tools" },
+];
+
+const VK_COMMAND_SUGGESTIONS: readonly VkCommandSuggestion[] = [
+  ...VK_PRIMARY_COMMAND_SUGGESTIONS,
+  { label: "Compact", command: "/compact" },
+  { label: "Context", command: "/context" },
+  { label: "Stop", command: "/stop" },
+  { label: "Tasks", command: "/tasks" },
+  { label: "Whoami", command: "/whoami" },
+];
 
 function chunkButtons(buttons: readonly VkReplyButton[], size: number): VkReplyButtons {
   const rows: VkReplyButton[][] = [];
@@ -21,8 +48,21 @@ function chunkButtons(buttons: readonly VkReplyButton[], size: number): VkReplyB
   return rows;
 }
 
-function toChannelData(buttons: VkReplyButtons): ReplyPayload["channelData"] | null {
-  return buttons.length > 0 ? { vk: { buttons } } : null;
+function toChannelData(
+  buttons: VkReplyButtons,
+  options: { inline?: boolean; oneTime?: boolean } = {},
+): ReplyPayload["channelData"] | null {
+  if (buttons.length === 0) {
+    return null;
+  }
+
+  const spec: VkKeyboardSpec = {
+    buttons,
+    ...(options.inline ? { inline: true } : {}),
+    ...(options.oneTime !== undefined ? { oneTime: options.oneTime } : {}),
+  };
+
+  return { vk: spec };
 }
 
 function truncateLabel(value: string, maxChars = MAX_MODEL_LABEL_CHARS): string {
@@ -51,45 +91,79 @@ export function buildVkCommandsListChannelData(params: {
   currentPage: number;
   totalPages: number;
 }): ReplyPayload["channelData"] | null {
-  if (params.totalPages <= 1) {
-    return null;
-  }
+  const rows: VkReplyButton[][] = [
+    [
+      { text: "Models", callback_data: "/models" },
+      { text: "Status", callback_data: "/status" },
+    ],
+    [
+      { text: "Tools", callback_data: "/tools" },
+      { text: "Help", callback_data: "/help" },
+    ],
+  ];
 
-  const buttons: VkReplyButton[] = [];
+  const pagination: VkReplyButton[] = [];
   if (params.currentPage > 1) {
-    buttons.push({
+    pagination.push({
       text: "< Prev",
       callback_data: `/commands ${params.currentPage - 1}`,
     });
   }
-  buttons.push({
-    text: `${params.currentPage}/${params.totalPages}`,
-    callback_data: `/commands ${params.currentPage}`,
-  });
   if (params.currentPage < params.totalPages) {
-    buttons.push({
+    pagination.push({
       text: "Next >",
       callback_data: `/commands ${params.currentPage + 1}`,
     });
   }
-  return toChannelData([buttons]);
+  if (pagination.length > 0) {
+    rows.push(pagination);
+  }
+
+  return toChannelData(rows, {
+    inline: true,
+    oneTime: false,
+  });
 }
 
 export function buildVkModelsProviderChannelData(params: {
   providers: ProviderInfo[];
+  currentPage?: number;
+  totalPages?: number;
 }): ReplyPayload["channelData"] | null {
   if (params.providers.length === 0) {
     return null;
   }
-  return toChannelData(
-    chunkButtons(
-      params.providers.map((provider) => ({
-        text: `${provider.id} (${provider.count})`,
-        callback_data: `/models ${provider.id}`,
-      })),
-      PROVIDERS_PER_ROW,
-    ),
-  );
+  const rows = chunkButtons(
+    params.providers.map((provider) => ({
+      text: `${provider.id} (${provider.count})`,
+      callback_data: `/models ${provider.id}`,
+    })),
+    PROVIDERS_PER_ROW,
+  ).slice(0, Math.ceil(PROVIDERS_PAGE_SIZE / PROVIDERS_PER_ROW));
+
+  if ((params.totalPages ?? 1) > 1) {
+    const currentPage = Math.max(1, params.currentPage ?? 1);
+    const totalPages = Math.max(currentPage, params.totalPages ?? currentPage);
+    const pagination: VkReplyButton[] = [];
+    if (currentPage > 1) {
+      pagination.push({
+        text: "< Prev",
+        callback_data: `/models ${currentPage - 1}`,
+      });
+    }
+    if (currentPage < totalPages) {
+      pagination.push({
+        text: "Next >",
+        callback_data: `/models ${currentPage + 1}`,
+      });
+    }
+    rows.push(pagination);
+  }
+
+  return toChannelData(rows, {
+    inline: true,
+    oneTime: false,
+  });
 }
 
 export function buildVkModelsListChannelData(params: {
@@ -104,20 +178,21 @@ export function buildVkModelsListChannelData(params: {
   const pageSize = params.pageSize ?? MODELS_PAGE_SIZE;
   const startIndex = (params.currentPage - 1) * pageSize;
   const pageModels = params.models.slice(startIndex, startIndex + pageSize);
-  const rows: VkReplyButton[][] = pageModels.map((model) => {
-    const displayLabel = params.modelNames?.get(`${params.provider}/${model}`) ?? model;
-    const selected = isCurrentModelSelection({
-      currentModel: params.currentModel,
-      provider: params.provider,
-      model,
-    });
-    return [
-      {
+  const rows = chunkButtons(
+    pageModels.map((model) => {
+      const displayLabel = params.modelNames?.get(`${params.provider}/${model}`) ?? model;
+      const selected = isCurrentModelSelection({
+        currentModel: params.currentModel,
+        provider: params.provider,
+        model,
+      });
+      return {
         text: selected ? `${truncateLabel(displayLabel)} ✓` : truncateLabel(displayLabel),
         callback_data: `/model ${params.provider}/${model}`,
-      },
-    ];
-  });
+      };
+    }),
+    MODELS_PER_ROW,
+  );
 
   if (params.totalPages > 1) {
     const pagination: VkReplyButton[] = [];
@@ -127,10 +202,6 @@ export function buildVkModelsListChannelData(params: {
         callback_data: `/models ${params.provider} ${params.currentPage - 1}`,
       });
     }
-    pagination.push({
-      text: `${params.currentPage}/${params.totalPages}`,
-      callback_data: `/models ${params.provider} ${params.currentPage}`,
-    });
     if (params.currentPage < params.totalPages) {
       pagination.push({
         text: "Next >",
@@ -147,13 +218,65 @@ export function buildVkModelsListChannelData(params: {
     },
   ]);
 
-  return toChannelData(rows);
+  return toChannelData(rows, {
+    inline: true,
+    oneTime: false,
+  });
 }
 
 export function buildVkModelBrowseChannelData(): ReplyPayload["channelData"] {
   return {
     vk: {
+      inline: true,
+      oneTime: false,
       buttons: [[{ text: "Browse providers", callback_data: "/models" }]],
     },
+  };
+}
+
+export function resolveVkSlashCommandSuggestionReply(
+  body: string,
+): { text: string; channelData: ReplyPayload["channelData"] } | null {
+  const normalized = body.trim().toLowerCase();
+  if (!normalized.startsWith("/") || normalized.includes(" ")) {
+    return null;
+  }
+
+  const matches =
+    normalized === "/"
+      ? VK_PRIMARY_COMMAND_SUGGESTIONS
+      : VK_COMMAND_SUGGESTIONS.filter((entry) =>
+          entry.command.startsWith(normalized),
+        );
+  if (matches.length === 0) {
+    return null;
+  }
+  if (normalized !== "/" && matches.some((entry) => entry.command === normalized)) {
+    return null;
+  }
+
+  const channelData = toChannelData(
+    chunkButtons(
+      matches.map((entry) => ({
+        text: entry.label,
+        callback_data: entry.command,
+      })),
+      COMMAND_SUGGESTIONS_PER_ROW,
+    ),
+    {
+      inline: true,
+      oneTime: false,
+    },
+  );
+  if (!channelData) {
+    return null;
+  }
+
+  return {
+    text:
+      normalized === "/"
+        ? "VK does not support inline slash autocomplete. Choose a command:"
+        : `VK does not support inline slash autocomplete. Matches for ${normalized}:`,
+    channelData,
   };
 }

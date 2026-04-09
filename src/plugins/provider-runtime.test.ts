@@ -376,6 +376,54 @@ describe("provider-runtime", () => {
     });
   });
 
+  it("skips broad config-hook fallback for generic custom providers without alias candidates", () => {
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["google", "openai"]);
+    resolvePluginProvidersMock.mockReturnValue([]);
+
+    expect(
+      normalizeProviderConfigWithPlugin({
+        provider: "proxy",
+        context: {
+          provider: "proxy",
+          providerConfig: {
+            baseUrl: "https://proxy.example.com/v1",
+            api: "openai-completions",
+            models: [],
+          },
+        },
+      }),
+    ).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["proxy"],
+      }),
+    );
+  });
+
+  it("skips broad reasoning-output fallback for generic custom providers without alias candidates", () => {
+    resolveCatalogHookProviderPluginIdsMock.mockReturnValue(["google", "openai"]);
+    resolvePluginProvidersMock.mockReturnValue([]);
+
+    expect(
+      resolveProviderReasoningOutputModeWithPlugin({
+        provider: "proxy",
+        context: createDemoResolvedModelContext({
+          provider: "proxy",
+          modelApi: MODEL.api,
+        }),
+      }),
+    ).toBeUndefined();
+
+    expect(resolvePluginProvidersMock).toHaveBeenCalledTimes(1);
+    expect(resolvePluginProvidersMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        providerRefs: ["proxy"],
+      }),
+    );
+  });
+
   it("resolves provider config defaults through owner plugins", () => {
     resolvePluginProvidersMock.mockReturnValue([
       {

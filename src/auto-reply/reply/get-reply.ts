@@ -135,10 +135,23 @@ export async function getReplyFromConfig(
   configOverride?: OpenClawConfig,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
   const isFastTestEnv = process.env.OPENCLAW_TEST_FAST === "1";
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[get-reply] ${step} session=${ctx.SessionKey ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
+  traceIngress("start");
   const cfg =
     configOverride == null
       ? loadConfig()
-      : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
+      : opts?.configOverrideMode === "replace"
+        ? configOverride
+        : (applyMergePatch(loadConfig(), configOverride) as OpenClawConfig);
   const targetSessionKey =
     ctx.CommandSource === "native" ? ctx.CommandTargetSessionKey?.trim() : undefined;
   const agentSessionKey = targetSessionKey || ctx.SessionKey;
@@ -181,10 +194,12 @@ export async function getReplyFromConfig(
   }
 
   const workspaceDirRaw = resolveAgentWorkspaceDir(cfg, agentId) ?? DEFAULT_AGENT_WORKSPACE_DIR;
+  traceIngress("before-ensureAgentWorkspace");
   const workspace = await ensureAgentWorkspace({
     dir: workspaceDirRaw,
     ensureBootstrapFiles: !agentCfg?.skipBootstrap && !isFastTestEnv,
   });
+  traceIngress("after-ensureAgentWorkspace");
   const workspaceDir = workspace.dir;
   const agentDir = resolveAgentDir(cfg, agentId);
   const timeoutMs = resolveAgentTimeoutMs({ cfg, overrideSeconds: opts?.timeoutOverrideSeconds });
@@ -204,16 +219,20 @@ export async function getReplyFromConfig(
   const finalized = finalizeInboundContext(ctx);
 
   if (!isFastTestEnv) {
+    traceIngress("before-media-understanding");
     await applyMediaUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
       agentDir,
       activeModel: { provider, model },
     });
+    traceIngress("after-media-understanding");
+    traceIngress("before-link-understanding");
     await applyLinkUnderstandingIfNeeded({
       ctx: finalized,
       cfg,
     });
+    traceIngress("after-link-understanding");
   }
   emitPreAgentMessageHooks({
     ctx: finalized,
@@ -227,11 +246,13 @@ export async function getReplyFromConfig(
     cfg,
     commandAuthorized,
   });
+  traceIngress("before-initSessionState");
   const sessionState = await initSessionState({
     ctx: finalized,
     cfg,
     commandAuthorized,
   });
+  traceIngress("after-initSessionState");
   let {
     sessionCtx,
     sessionEntry,
@@ -301,6 +322,7 @@ export async function getReplyFromConfig(
     }
   }
 
+  traceIngress("before-resolveReplyDirectives");
   const directiveResult = await resolveReplyDirectives({
     ctx: finalized,
     cfg,
@@ -328,6 +350,7 @@ export async function getReplyFromConfig(
     opts: resolvedOpts,
     skillFilter: mergedSkillFilter,
   });
+  traceIngress("after-resolveReplyDirectives");
   if (directiveResult.kind === "reply") {
     return directiveResult.reply;
   }
@@ -385,6 +408,7 @@ export async function getReplyFromConfig(
     });
   };
 
+  traceIngress("before-handleInlineActions");
   const inlineActionResult = await handleInlineActions({
     ctx,
     sessionCtx,
@@ -425,6 +449,7 @@ export async function getReplyFromConfig(
     abortedLastRun,
     skillFilter: mergedSkillFilter,
   });
+  traceIngress("after-handleInlineActions");
   if (inlineActionResult.kind === "reply") {
     await maybeEmitMissingResetHooks();
     return inlineActionResult.reply;
@@ -470,7 +495,8 @@ export async function getReplyFromConfig(
     });
   }
 
-  return runPreparedReply({
+  traceIngress("before-runPreparedReply");
+  const preparedReply = await runPreparedReply({
     ctx,
     sessionCtx,
     cfg,
@@ -515,4 +541,6 @@ export async function getReplyFromConfig(
     workspaceDir,
     abortedLastRun,
   });
+  traceIngress("after-runPreparedReply");
+  return preparedReply;
 }

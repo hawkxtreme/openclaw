@@ -32,6 +32,7 @@ import {
   resolveConfigIncludes,
 } from "./includes.js";
 import { findLegacyConfigIssues } from "./legacy.js";
+import type { LegacyConfigRule } from "./legacy.shared.js";
 import {
   asResolvedSourceConfig,
   asRuntimeConfig,
@@ -53,7 +54,6 @@ import {
 import type { OpenClawConfig, ConfigFileSnapshot, LegacyConfigIssue } from "./types.js";
 import {
   validateConfigObjectRawWithPlugins,
-  validateConfigObjectWithPlugins,
 } from "./validation.js";
 import { shouldWarnOnTouchedVersion } from "./version.js";
 
@@ -1639,11 +1639,18 @@ function resolveConfigForRead(
 function resolveLegacyConfigForRead(
   resolvedConfigRaw: unknown,
   sourceRaw: unknown,
+  options?: {
+    extraRules?: LegacyConfigRule[];
+    includeChannelRules?: boolean;
+  },
 ): LegacyMigrationResolution {
   const sourceLegacyIssues = findLegacyConfigIssues(
     resolvedConfigRaw,
     sourceRaw,
-    listPluginDoctorLegacyConfigRules(),
+    options?.extraRules ?? [],
+    {
+      includeChannelRules: options?.includeChannelRules,
+    },
   );
   return { effectiveConfigRaw: resolvedConfigRaw, sourceLegacyIssues };
 }
@@ -1703,9 +1710,21 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
   }
 
   function loadConfig(): OpenClawConfig {
+    const configLoadDebugEnabled = deps.env.OPENCLAW_DEBUG_CONFIG_LOAD === "1";
+    const configLoadStartMs = configLoadDebugEnabled ? Date.now() : 0;
+    const traceConfigLoad = (step: string) => {
+      if (!configLoadDebugEnabled) {
+        return;
+      }
+      console.warn(
+        `[config-load] ${step} path=${configPath} elapsedMs=${Date.now() - configLoadStartMs}`,
+      );
+    };
     try {
+      traceConfigLoad("start");
       maybeLoadDotEnvForConfig(deps.env);
       if (!deps.fs.existsSync(configPath)) {
+        traceConfigLoad("config-missing");
         if (shouldEnableShellEnvFallback(deps.env) && !shouldDeferShellEnvFallback(deps.env)) {
           loadShellEnvFallback({
             enabled: true,
@@ -1717,14 +1736,18 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         }
         return {};
       }
+      traceConfigLoad("before-readFile");
       const raw = deps.fs.readFileSync(configPath, "utf-8");
+      traceConfigLoad("after-readFile");
       const parsed = deps.json5.parse(raw);
+      traceConfigLoad("after-parse");
       const recovered = maybeRecoverSuspiciousConfigReadSync({
         deps,
         configPath,
         raw,
         parsed,
       });
+      traceConfigLoad("after-recover");
       const effectiveRaw = recovered.raw;
       const effectiveParsed = recovered.parsed;
       const hash = hashConfigRaw(effectiveRaw);
@@ -1732,8 +1755,12 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         resolveConfigIncludesForRead(effectiveParsed, configPath, deps),
         deps.env,
       );
+      traceConfigLoad("after-resolveConfigForRead");
       const resolvedConfig = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, effectiveParsed);
+      const legacyResolution = resolveLegacyConfigForRead(resolvedConfig, effectiveParsed, {
+        includeChannelRules: false,
+      });
+      traceConfigLoad("after-legacyResolution");
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
       for (const w of readResolution.envWarnings) {
         deps.logger.warn(
@@ -1763,10 +1790,19 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         env: deps.env,
         homedir: deps.homedir,
       });
+      traceConfigLoad("after-preValidationDuplicates");
       if (preValidationDuplicates.length > 0) {
         throw new DuplicateAgentDirError(preValidationDuplicates);
       }
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      traceConfigLoad("before-validateConfigWithPlugins");
+      const validated = validateConfigObjectRawWithPlugins(effectiveConfigRaw, {
+        env: deps.env,
+        legacy: {
+          includePluginDoctorRules: false,
+          includeChannelRules: false,
+        },
+      });
+      traceConfigLoad("after-validateConfigWithPlugins");
       if (!validated.ok) {
         observeLoadConfigSnapshot({
           ...createConfigFileSnapshot({
@@ -1809,6 +1845,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
       warnIfConfigFromFuture(validated.config, deps.logger);
       const cfg = materializeRuntimeConfig(validated.config, "load");
+      traceConfigLoad("after-materializeRuntimeConfig");
       observeLoadConfigSnapshot({
         ...createConfigFileSnapshot({
           path: configPath,
@@ -1829,11 +1866,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         env: deps.env,
         homedir: deps.homedir,
       });
+      traceConfigLoad("after-postValidationDuplicates");
       if (duplicates.length > 0) {
         throw new DuplicateAgentDirError(duplicates);
       }
 
       applyConfigEnvVars(cfg, deps.env);
+      traceConfigLoad("after-applyConfigEnvVars");
 
       const enabled = shouldEnableShellEnvFallback(deps.env) || cfg.env?.shellEnv?.enabled === true;
       if (enabled && !shouldDeferShellEnvFallback(deps.env)) {
@@ -1851,6 +1890,7 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         cfg,
         () => pendingSecret ?? crypto.randomBytes(32).toString("hex"),
       );
+      traceConfigLoad("after-ensureOwnerDisplaySecret");
       const cfgWithOwnerDisplaySecret = ownerDisplaySecretResolution.config;
       if (ownerDisplaySecretResolution.generatedSecret) {
         AUTO_OWNER_DISPLAY_SECRET_BY_PATH.set(
@@ -1881,7 +1921,9 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
         AUTO_OWNER_DISPLAY_SECRET_PERSIST_WARNED.delete(configPath);
       }
 
-      return applyConfigOverrides(cfgWithOwnerDisplaySecret);
+      const finalConfig = applyConfigOverrides(cfgWithOwnerDisplaySecret);
+      traceConfigLoad("before-return");
+      return finalConfig;
     } catch (err) {
       if (err instanceof DuplicateAgentDirError) {
         deps.logger.error(err.message);
@@ -1991,10 +2033,22 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }));
 
       const resolvedConfigRaw = readResolution.resolvedConfigRaw;
-      const legacyResolution = resolveLegacyConfigForRead(resolvedConfigRaw, effectiveParsed);
+      const legacyResolution = resolveLegacyConfigForRead(
+        resolvedConfigRaw,
+        effectiveParsed,
+        {
+          extraRules: listPluginDoctorLegacyConfigRules(),
+        },
+      );
       const effectiveConfigRaw = legacyResolution.effectiveConfigRaw;
 
-      const validated = validateConfigObjectWithPlugins(effectiveConfigRaw, { env: deps.env });
+      const validated = validateConfigObjectRawWithPlugins(effectiveConfigRaw, {
+        env: deps.env,
+        legacy: {
+          includePluginDoctorRules: false,
+          includeChannelRules: false,
+        },
+      });
       if (!validated.ok) {
         return await finalizeReadConfigSnapshotInternalResult(deps, {
           snapshot: createConfigFileSnapshot({
@@ -2124,7 +2178,13 @@ export function createConfigIO(overrides: ConfigIoDeps = {}) {
       }
     }
 
-    const validated = validateConfigObjectRawWithPlugins(persistCandidate, { env: deps.env });
+    const validated = validateConfigObjectRawWithPlugins(persistCandidate, {
+      env: deps.env,
+      legacy: {
+        includePluginDoctorRules: false,
+        includeChannelRules: false,
+      },
+    });
     if (!validated.ok) {
       const issue = validated.issues[0];
       const pathLabel = issue?.path ? issue.path : "<root>";

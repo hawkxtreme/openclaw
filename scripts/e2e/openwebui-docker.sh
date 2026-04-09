@@ -64,28 +64,7 @@ docker run -d \
 
     openai_api_key="${OPENAI_API_KEY:?OPENAI_API_KEY required}"
     batch_file="$(mktemp /tmp/openclaw-openwebui-config.XXXXXX.json)"
-    OPENCLAW_CONFIG_BATCH_PATH="$batch_file" node - <<'"'"'NODE'"'"' "$openai_api_key"
-const fs = require("node:fs");
-
-const openaiApiKey = process.argv[2];
-const batchPath = process.env.OPENCLAW_CONFIG_BATCH_PATH;
-const entries = [
-  { path: "models.providers.openai.apiKey", value: openaiApiKey },
-  {
-    path: "models.providers.openai.baseUrl",
-    value: (process.env.OPENAI_BASE_URL || "https://api.openai.com/v1").trim(),
-  },
-  { path: "models.providers.openai.models", value: [] },
-  { path: "gateway.controlUi.enabled", value: false },
-  { path: "gateway.mode", value: "local" },
-  { path: "gateway.bind", value: "lan" },
-  { path: "gateway.auth.mode", value: "token" },
-  { path: "gateway.auth.token", value: process.env.OPENCLAW_GATEWAY_TOKEN },
-  { path: "gateway.http.endpoints.chatCompletions.enabled", value: true },
-  { path: "agents.defaults.model.primary", value: process.env.OPENCLAW_OPENWEBUI_MODEL },
-];
-fs.writeFileSync(batchPath, `${JSON.stringify(entries, null, 2)}\n`, "utf8");
-NODE
+    node /app/scripts/e2e/openwebui-config-batch.mjs "$openai_api_key" >"$batch_file"
     node "$entry" config set --batch-file "$batch_file" >/dev/null
     rm -f "$batch_file"
 
@@ -163,7 +142,7 @@ if [ "$ow_ready" -ne 1 ]; then
 fi
 
 echo "Running Open WebUI -> OpenClaw smoke..."
-if ! docker exec \
+if ! MSYS_NO_PATHCONV=1 MSYS2_ARG_CONV_EXCL="*" docker exec \
   -e "OPENWEBUI_BASE_URL=http://$OW_NAME:$WEBUI_PORT" \
   -e "OPENWEBUI_ADMIN_EMAIL=$ADMIN_EMAIL" \
   -e "OPENWEBUI_ADMIN_PASSWORD=$ADMIN_PASSWORD" \

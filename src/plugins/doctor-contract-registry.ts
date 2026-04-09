@@ -89,21 +89,33 @@ function resolvePluginDoctorContracts(params?: {
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
 }): PluginDoctorContractEntry[] {
+  const traceEnabled = process.env.OPENCLAW_DEBUG_CONFIG_VALIDATE === "1";
+  const startedAt = traceEnabled ? Date.now() : 0;
+  const trace = (step: string) => {
+    if (!traceEnabled) {
+      return;
+    }
+    console.warn(`[doctor-contracts] ${step} elapsedMs=${Date.now() - startedAt}`);
+  };
   const env = params?.env ?? process.env;
+  trace("start");
   const cacheKey = buildDoctorContractCacheKey({
     workspaceDir: params?.workspaceDir,
     env,
   });
   const cached = doctorContractCache.get(cacheKey);
   if (cached) {
+    trace("cache-hit");
     return cached;
   }
 
+  trace("before-discovery");
   const discovery = discoverOpenClawPlugins({
     workspaceDir: params?.workspaceDir,
     env,
     cache: true,
   });
+  trace("after-discovery");
   const manifestRegistry = loadPluginManifestRegistry({
     workspaceDir: params?.workspaceDir,
     env,
@@ -111,6 +123,7 @@ function resolvePluginDoctorContracts(params?: {
     candidates: discovery.candidates,
     diagnostics: discovery.diagnostics,
   });
+  trace("after-manifest-registry");
 
   const entries: PluginDoctorContractEntry[] = [];
   for (const record of manifestRegistry.plugins) {
@@ -138,6 +151,7 @@ function resolvePluginDoctorContracts(params?: {
   }
 
   doctorContractCache.set(cacheKey, entries);
+  trace("return");
   return entries;
 }
 

@@ -3,7 +3,11 @@ import type { AnyAgentTool } from "../agents/tools/common.js";
 import { applyPluginAutoEnable } from "../config/plugin-auto-enable.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { applyTestPluginDefaults, normalizePluginsConfig } from "./config-state.js";
-import { resolveRuntimePluginRegistry, type PluginLoadOptions } from "./loader.js";
+import {
+  resolveCompatibleRuntimePluginRegistry,
+  resolveRuntimePluginRegistry,
+  type PluginLoadOptions,
+} from "./loader.js";
 import { createPluginLoaderLogger } from "./logger.js";
 import {
   getActivePluginRegistry,
@@ -69,6 +73,19 @@ function resolvePluginToolRegistry(params: {
   return resolveRuntimePluginRegistry(params.loadOptions);
 }
 
+function createIngressTimingTracer(scope: string, workspaceDir?: string) {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(
+      `[${scope}] ${step} workspace=${workspaceDir ?? "(none)"} elapsedMs=${Date.now() - startedAt}`,
+    );
+  };
+}
+
 export function resolvePluginTools(params: {
   context: OpenClawPluginToolContext;
   existingToolNames?: Set<string>;
@@ -77,6 +94,10 @@ export function resolvePluginTools(params: {
   allowGatewaySubagentBinding?: boolean;
   env?: NodeJS.ProcessEnv;
 }): AnyAgentTool[] {
+  const traceIngress = createIngressTimingTracer(
+    "resolve-plugin-tools",
+    params.context.workspaceDir,
+  );
   // Fast path: when plugins are effectively disabled, avoid discovery/jiti entirely.
   // This matters a lot for unit tests and for tool construction hot paths.
   const env = params.env ?? process.env;
@@ -84,7 +105,9 @@ export function resolvePluginTools(params: {
   const autoEnabled = applyPluginAutoEnable({ config: baseConfig, env });
   const effectiveConfig = autoEnabled.config;
   const normalized = normalizePluginsConfig(effectiveConfig.plugins);
+  traceIngress(`after-config-normalize enabled=${normalized.enabled}`);
   if (!normalized.enabled) {
+    traceIngress("plugins-disabled");
     return [];
   }
 
@@ -100,10 +123,15 @@ export function resolvePluginTools(params: {
     env,
     logger: createPluginLoaderLogger(log),
   };
+  const compatibleRegistry = resolveCompatibleRuntimePluginRegistry(loadOptions);
+  traceIngress(`before-registry compatibleActive=${compatibleRegistry ? "yes" : "no"}`);
   const registry = resolvePluginToolRegistry({
     loadOptions,
     allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
   });
+  traceIngress(
+    `after-registry registryTools=${registry?.tools.length ?? 0} diagnostics=${registry?.diagnostics.length ?? 0}`,
+  );
   if (!registry) {
     return [];
   }
@@ -185,6 +213,7 @@ export function resolvePluginTools(params: {
       tools.push(tool);
     }
   }
+  traceIngress(`after-plugin-tool-factories total=${tools.length}`);
 
   return tools;
 }

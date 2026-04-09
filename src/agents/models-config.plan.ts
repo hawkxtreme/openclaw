@@ -15,6 +15,17 @@ import {
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
+function createModelsPlanTrace() {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(`[models-plan] ${step} elapsedMs=${Date.now() - startedAt}`);
+  };
+}
+
 export type ModelsJsonPlan =
   | {
       action: "skip";
@@ -95,14 +106,20 @@ export async function planOpenClawModelsJson(params: {
   existingParsed: unknown;
 }): Promise<ModelsJsonPlan> {
   const { cfg, agentDir, env } = params;
+  const trace = createModelsPlanTrace();
+  trace("start");
+  trace("before-resolveProvidersForModelsJson");
   const providers = await resolveProvidersForModelsJson({ cfg, agentDir, env });
+  trace(`after-resolveProvidersForModelsJson providerCount=${Object.keys(providers).length}`);
 
   if (Object.keys(providers).length === 0) {
+    trace("return-skip-empty-providers");
     return { action: "skip" };
   }
 
   const mode = cfg.models?.mode ?? "merge";
   const secretRefManagedProviders = new Set<string>();
+  trace("before-normalizeProviders");
   const normalizedProviders =
     normalizeProviders({
       providers,
@@ -113,6 +130,8 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? providers;
+  trace(`after-normalizeProviders providerCount=${Object.keys(normalizedProviders).length}`);
+  trace("before-resolveProvidersForMode");
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: params.existingParsed,
@@ -120,6 +139,8 @@ export async function planOpenClawModelsJson(params: {
     secretRefManagedProviders,
     explicitBaseUrlProviders: resolveExplicitBaseUrlProviders(cfg.models),
   });
+  trace(`after-resolveProvidersForMode providerCount=${Object.keys(mergedProviders).length}`);
+  trace("before-enforceSourceManagedProviderSecrets");
   const secretEnforcedProviders =
     enforceSourceManagedProviderSecrets({
       providers: mergedProviders,
@@ -127,13 +148,20 @@ export async function planOpenClawModelsJson(params: {
       sourceSecretDefaults: params.sourceConfigForSecrets?.secrets?.defaults,
       secretRefManagedProviders,
     }) ?? mergedProviders;
+  trace(
+    `after-enforceSourceManagedProviderSecrets providerCount=${Object.keys(secretEnforcedProviders).length}`,
+  );
+  trace("before-applyNativeStreamingUsageCompat");
   const finalProviders = applyNativeStreamingUsageCompat(secretEnforcedProviders);
+  trace(`after-applyNativeStreamingUsageCompat providerCount=${Object.keys(finalProviders).length}`);
   const nextContents = `${JSON.stringify({ providers: finalProviders }, null, 2)}\n`;
 
   if (params.existingRaw === nextContents) {
+    trace("return-noop");
     return { action: "noop" };
   }
 
+  trace("return-write");
   return {
     action: "write",
     contents: nextContents,

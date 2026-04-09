@@ -85,4 +85,31 @@ describe("ensureSkillsWatcher", () => {
     expect(ignored.some((re) => re.test("/tmp/.hidden/skills/index.md"))).toBe(false);
     expect(ignored.some((re) => re.test("/tmp/workspace/skills/my-skill/SKILL.md"))).toBe(false);
   });
+
+  it("disposes a single workspace watcher on demand", async () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/other-workspace" });
+
+    const firstWatcher = watchMock.mock.results[0]?.value as { close: ReturnType<typeof vi.fn> };
+    const secondWatcher = watchMock.mock.results[1]?.value as { close: ReturnType<typeof vi.fn> };
+
+    await refreshModule.disposeSkillsWatchers({ workspaceDir: "/tmp/workspace" });
+
+    expect(firstWatcher.close).toHaveBeenCalledTimes(1);
+    expect(secondWatcher.close).not.toHaveBeenCalled();
+  });
+
+  it("skips watcher setup and closes an existing watcher when env disables skills watch", async () => {
+    refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+    const firstWatcher = watchMock.mock.results[0]?.value as { close: ReturnType<typeof vi.fn> };
+
+    process.env.OPENCLAW_DISABLE_SKILLS_WATCH = "1";
+    try {
+      refreshModule.ensureSkillsWatcher({ workspaceDir: "/tmp/workspace" });
+      expect(watchMock).toHaveBeenCalledTimes(1);
+      expect(firstWatcher.close).toHaveBeenCalledTimes(1);
+    } finally {
+      delete process.env.OPENCLAW_DISABLE_SKILLS_WATCH;
+    }
+  });
 });

@@ -212,6 +212,24 @@ describe("resolveBundledPluginsDir", () => {
     });
   });
 
+  it("falls back to built dist/extensions when dist-runtime is only partially staged", () => {
+    const repoRoot = createOpenClawRoot({
+      prefix: "openclaw-bundled-dir-partial-runtime-",
+      hasDistRuntimeExtensions: true,
+      hasDistExtensions: true,
+    });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "vk"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist", "extensions", "telegram"), { recursive: true });
+    fs.mkdirSync(path.join(repoRoot, "dist-runtime", "extensions", "telegram"), {
+      recursive: true,
+    });
+
+    expectResolvedBundledDirFromRoot({
+      repoRoot,
+      expectedRelativeDir: path.join("dist", "extensions"),
+    });
+  });
+
   it("returns a stable empty bundled plugin directory when bundled plugins are disabled", () => {
     const repoRoot = createOpenClawRoot({
       prefix: "openclaw-bundled-dir-disabled-",

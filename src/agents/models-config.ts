@@ -136,20 +136,34 @@ export async function ensureOpenClawModelsJson(
   config?: OpenClawConfig,
   agentDirOverride?: string,
 ): Promise<{ agentDir: string; wrote: boolean }> {
+  const traceEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = traceEnabled ? Date.now() : 0;
+  const trace = (step: string) => {
+    if (!traceEnabled) {
+      return;
+    }
+    console.warn(`[models-json] ${step} elapsedMs=${Date.now() - startedAt}`);
+  };
+  trace("start");
   const resolved = resolveModelsConfigInput(config);
   const cfg = resolved.config;
   const agentDir = agentDirOverride?.trim() ? agentDirOverride.trim() : resolveOpenClawAgentDir();
   const targetPath = path.join(agentDir, "models.json");
+  trace("before-buildModelsJsonFingerprint");
   const fingerprint = await buildModelsJsonFingerprint({
     config: cfg,
     sourceConfigForSecrets: resolved.sourceConfigForSecrets,
     agentDir,
   });
+  trace("after-buildModelsJsonFingerprint");
   const cached = MODELS_JSON_STATE.readyCache.get(targetPath);
   if (cached) {
+    trace("before-readyCache-await");
     const settled = await cached;
+    trace("after-readyCache-await");
     if (settled.fingerprint === fingerprint) {
       await ensureModelsFileMode(targetPath);
+      trace("return-cached");
       return settled.result;
     }
   }
@@ -158,7 +172,10 @@ export async function ensureOpenClawModelsJson(
     // Ensure config env vars (e.g. AWS_PROFILE, AWS_ACCESS_KEY_ID) are
     // are available to provider discovery without mutating process.env.
     const env = createConfigRuntimeEnv(cfg);
+    trace("before-readExistingModelsFile");
     const existingModelsFile = await readExistingModelsFile(targetPath);
+    trace("after-readExistingModelsFile");
+    trace("before-planOpenClawModelsJson");
     const plan = await planOpenClawModelsJson({
       cfg,
       sourceConfigForSecrets: resolved.sourceConfigForSecrets,
@@ -167,24 +184,31 @@ export async function ensureOpenClawModelsJson(
       existingRaw: existingModelsFile.raw,
       existingParsed: existingModelsFile.parsed,
     });
+    trace("after-planOpenClawModelsJson");
 
     if (plan.action === "skip") {
+      trace("return-skip");
       return { fingerprint, result: { agentDir, wrote: false } };
     }
 
     if (plan.action === "noop") {
       await ensureModelsFileMode(targetPath);
+      trace("return-noop");
       return { fingerprint, result: { agentDir, wrote: false } };
     }
 
+    trace("before-write");
     await fs.mkdir(agentDir, { recursive: true, mode: 0o700 });
     await writeModelsFileAtomic(targetPath, plan.contents);
     await ensureModelsFileMode(targetPath);
+    trace("after-write");
     return { fingerprint, result: { agentDir, wrote: true } };
   });
   MODELS_JSON_STATE.readyCache.set(targetPath, pending);
   try {
+    trace("before-pending-await");
     const settled = await pending;
+    trace("after-pending-await");
     return settled.result;
   } catch (error) {
     if (MODELS_JSON_STATE.readyCache.get(targetPath) === pending) {

@@ -25,6 +25,23 @@ function isSourceCheckoutRoot(packageRoot: string): boolean {
   );
 }
 
+function isCompleteRuntimeExtensionsDir(
+  runtimeExtensionsDir: string,
+  builtExtensionsDir: string,
+): boolean {
+  try {
+    const builtPluginDirs = fs
+      .readdirSync(builtExtensionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name);
+    return builtPluginDirs.every((pluginDir) =>
+      fs.existsSync(path.join(runtimeExtensionsDir, pluginDir)),
+    );
+  } catch {
+    return false;
+  }
+}
+
 function resolveBundledDirFromPackageRoot(
   packageRoot: string,
   preferSourceCheckout: boolean,
@@ -39,7 +56,13 @@ function resolveBundledDirFromPackageRoot(
   // dist/ tree exists; otherwise wrappers can drift ahead of the last build.
   const runtimeExtensionsDir = path.join(packageRoot, "dist-runtime", "extensions");
   if (fs.existsSync(runtimeExtensionsDir) && fs.existsSync(builtExtensionsDir)) {
-    return runtimeExtensionsDir;
+    // Failed runtime-postbuild runs can leave dist-runtime partially populated
+    // on Windows (for example after a symlink EPERM). Falling back to the full
+    // built tree avoids hiding bundled plugins from config/discovery.
+    if (isCompleteRuntimeExtensionsDir(runtimeExtensionsDir, builtExtensionsDir)) {
+      return runtimeExtensionsDir;
+    }
+    return builtExtensionsDir;
   }
   if (fs.existsSync(builtExtensionsDir)) {
     return builtExtensionsDir;

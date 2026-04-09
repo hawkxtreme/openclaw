@@ -123,6 +123,35 @@ describe("handleModelsCommand", () => {
     expect(buttons?.length).toBeGreaterThan(0);
   });
 
+  it("treats numeric /models arguments as provider-list pagination", async () => {
+    const pagedCfg = {
+      commands: { text: true },
+      agents: {
+        defaults: {
+          model: { primary: "alpha/model-1" },
+          models: Object.fromEntries(
+            Array.from({ length: 19 }, (_, index) => [
+              `p${String(index + 1).padStart(2, "0")}/model-1`,
+              {},
+            ]),
+          ),
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await handleModelsCommand(
+      buildModelsParams("/models 2", pagedCfg, "telegram"),
+      true,
+    );
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toBe("Select a provider (2/3):");
+    const buttons = (result?.reply?.channelData as { telegram?: { buttons?: Array<Array<{ text: string }>> } })
+      ?.telegram?.buttons;
+    expect(buttons?.flat().some((button) => button.text.includes("p07"))).toBe(false);
+    expect(buttons?.flat().some((button) => button.text.includes("p08"))).toBe(true);
+  });
+
   it("handles provider pagination all mode and unknown providers", async () => {
     const cases = [
       {

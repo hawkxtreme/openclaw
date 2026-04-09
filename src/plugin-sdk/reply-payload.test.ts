@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createNormalizedOutboundDeliverer,
   countOutboundMedia,
   deliverFormattedTextWithAttachments,
   deliverTextOrMediaReply,
@@ -67,6 +68,51 @@ describe("sendPayloadWithChunkedTextAndMedia", () => {
     expect(isNumericTargetId("  987  ")).toBe(true);
     expect(isNumericTargetId("ab12")).toBe(false);
     expect(isNumericTargetId("")).toBe(false);
+  });
+
+  it("preserves channel-specific metadata when normalizing outbound payloads", async () => {
+    const deliver = vi.fn(async () => undefined);
+    const normalizedDeliver = createNormalizedOutboundDeliverer(deliver);
+
+    await normalizedDeliver({
+      text: "Select a provider:",
+      channelData: {
+        vk: {
+          inline: true,
+          buttons: [[{ text: "proxy", callback_data: "/models proxy" }]],
+        },
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "proxy", value: "/models proxy" }],
+          },
+        ],
+      },
+      replyToId: "42",
+    });
+
+    expect(deliver).toHaveBeenCalledWith({
+      text: "Select a provider:",
+      mediaUrls: undefined,
+      mediaUrl: undefined,
+      replyToId: "42",
+      channelData: {
+        vk: {
+          inline: true,
+          buttons: [[{ text: "proxy", callback_data: "/models proxy" }]],
+        },
+      },
+      interactive: {
+        blocks: [
+          {
+            type: "buttons",
+            buttons: [{ label: "proxy", value: "/models proxy" }],
+          },
+        ],
+      },
+    });
   });
 });
 

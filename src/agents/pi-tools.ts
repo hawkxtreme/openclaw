@@ -60,6 +60,19 @@ import {
 } from "./tool-policy.js";
 import { resolveWorkspaceRoot } from "./workspace-dir.js";
 
+function createIngressTimingTracer(scope: string, sessionKey?: string, fallbackId?: string) {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(
+      `[${scope}] ${step} session=${sessionKey ?? fallbackId ?? "(no-session)"} elapsedMs=${Date.now() - startedAt}`,
+    );
+  };
+}
+
 function isOpenAIProvider(provider?: string) {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai" || normalized === "openai-codex";
@@ -320,6 +333,11 @@ export function createOpenClawCodingTools(options?: {
   /** Callback invoked when sessions_yield tool is called. */
   onYield?: (message: string) => Promise<void> | void;
 }): AnyAgentTool[] {
+  const traceIngress = createIngressTimingTracer(
+    "create-openclaw-coding-tools",
+    options?.sessionKey,
+    options?.sessionId,
+  );
   const execToolName = "exec";
   const sandbox = options?.sandbox?.enabled ? options.sandbox : undefined;
   const isMemoryFlushRun = options?.trigger === "memory";
@@ -416,6 +434,7 @@ export function createOpenClawCodingTools(options?: {
     throw new Error("Sandbox filesystem bridge is unavailable.");
   }
   const imageSanitization = resolveImageSanitizationLimits(options?.config);
+  traceIngress("after-policy-resolution");
 
   const base = (codingTools as unknown as AnyAgentTool[]).flatMap((tool) => {
     if (tool.name === readTool.name) {
@@ -515,6 +534,7 @@ export function createOpenClawCodingTools(options?: {
               : undefined,
           workspaceOnly: applyPatchWorkspaceOnly,
         });
+  traceIngress("after-core-tool-construction");
   const tools: AnyAgentTool[] = [
     ...base,
     ...(sandboxRoot
@@ -595,6 +615,7 @@ export function createOpenClawCodingTools(options?: {
       allowGatewaySubagentBinding: options?.allowGatewaySubagentBinding,
     }),
   ];
+  traceIngress(`after-openclaw-tools total=${tools.length}`);
   const toolsForMemoryFlush =
     isMemoryFlushRun && memoryFlushWritePath
       ? tools.flatMap((tool) => {
@@ -617,10 +638,12 @@ export function createOpenClawCodingTools(options?: {
           return [tool];
         })
       : tools;
+  traceIngress(`after-memory-flush-filter total=${toolsForMemoryFlush.length}`);
   const toolsForMessageProvider = applyMessageProviderToolPolicy(
     toolsForMemoryFlush,
     options?.messageProvider,
   );
+  traceIngress(`after-message-provider-policy total=${toolsForMessageProvider.length}`);
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
     config: options?.config,
     modelProvider: options?.modelProvider,
@@ -629,9 +652,11 @@ export function createOpenClawCodingTools(options?: {
     agentDir: options?.agentDir,
     modelCompat: options?.modelCompat,
   });
+  traceIngress(`after-model-provider-policy total=${toolsForModelProvider.length}`);
   // Security: treat unknown/undefined as unauthorized (opt-in, not opt-out)
   const senderIsOwner = options?.senderIsOwner === true;
   const toolsByAuthorization = applyOwnerOnlyToolPolicy(toolsForModelProvider, senderIsOwner);
+  traceIngress(`after-owner-policy total=${toolsByAuthorization.length}`);
   const subagentFiltered = applyToolPolicyPipeline({
     tools: toolsByAuthorization,
     toolMeta: (tool) => getPluginToolMeta(tool),
@@ -655,6 +680,7 @@ export function createOpenClawCodingTools(options?: {
       { policy: subagentPolicy, label: "subagent tools.allow" },
     ],
   });
+  traceIngress(`after-tool-policy-pipeline total=${subagentFiltered.length}`);
   // Always normalize tool JSON Schemas before handing them to pi-agent/pi-ai.
   // Without this, some providers (notably OpenAI) will reject root-level union schemas.
   // Provider-specific cleaning: Gemini needs constraint keywords stripped, but Anthropic expects them.
@@ -665,6 +691,7 @@ export function createOpenClawCodingTools(options?: {
       modelCompat: options?.modelCompat,
     }),
   );
+  traceIngress(`after-normalize-tool-parameters total=${normalized.length}`);
   const withHooks = normalized.map((tool) =>
     wrapToolWithBeforeToolCallHook(tool, {
       agentId,
@@ -674,12 +701,15 @@ export function createOpenClawCodingTools(options?: {
       loopDetection: resolveToolLoopDetectionConfig({ cfg: options?.config, agentId }),
     }),
   );
+  traceIngress(`after-before-tool-call-hooks total=${withHooks.length}`);
   const withAbort = options?.abortSignal
     ? withHooks.map((tool) => wrapToolWithAbortSignal(tool, options.abortSignal))
     : withHooks;
+  traceIngress(`after-abort-wrapping total=${withAbort.length}`);
   const withDeferredFollowupDescriptions = applyDeferredFollowupToolDescriptions(withAbort, {
     agentId,
   });
+  traceIngress(`after-deferred-followup-descriptions total=${withDeferredFollowupDescriptions.length}`);
 
   // NOTE: Keep canonical (lowercase) tool names here.
   // pi-ai's Anthropic OAuth transport remaps tool names to Claude Code-style names

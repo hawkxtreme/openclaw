@@ -1,7 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import {
+  createChannelTestPluginBase,
+  createTestRegistry,
+} from "../../test-utils/channel-plugins.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import type { MsgContext } from "../templating.js";
 import { handleContextCommand } from "./commands-context-command.js";
+import { handleCommandsListCommand } from "./commands-info.js";
 import type { HandleCommandsParams } from "./commands-types.js";
 import { handleWhoamiCommand } from "./commands-whoami.js";
 
@@ -15,6 +21,7 @@ function buildInfoParams(
   commandBodyNormalized: string,
   cfg: OpenClawConfig,
   ctxOverrides?: Partial<MsgContext>,
+  commandOverrides?: Partial<HandleCommandsParams["command"]>,
 ): HandleCommandsParams {
   return {
     cfg,
@@ -35,6 +42,7 @@ function buildInfoParams(
       ownerList: [],
       from: "12345",
       to: "bot",
+      ...commandOverrides,
     },
     sessionKey: "agent:main:whatsapp:direct:12345",
     workspaceDir: "/tmp",
@@ -54,6 +62,7 @@ function buildInfoParams(
 describe("info command handlers", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    setActivePluginRegistry(createTestRegistry([]));
     buildContextReplyMock.mockImplementation(async (params: HandleCommandsParams) => {
       const normalized = params.command.commandBodyNormalized;
       if (normalized === "/context list") {
@@ -110,5 +119,58 @@ describe("info command handlers", () => {
         expect(result?.reply?.text).toContain(expectedText);
       }
     }
+  });
+
+  it("supports paginated /commands navigation on text-button surfaces", async () => {
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "vk",
+          source: "test",
+          plugin: {
+            ...createChannelTestPluginBase({
+              id: "vk",
+              label: "VK",
+              docsPath: "/channels/vk",
+              capabilities: { chatTypes: ["direct", "group"], media: true },
+            }),
+            commands: {
+              buildCommandsListChannelData: ({ currentPage, totalPages }: { currentPage: number; totalPages: number; }) => ({
+                vk: {
+                  buttons: [[{ text: `${currentPage}/${totalPages}`, callback_data: `/commands ${currentPage}` }]],
+                },
+              }),
+            },
+          },
+        },
+      ]),
+    );
+
+    const params = buildInfoParams(
+        "/commands 2",
+        {
+          commands: { text: true },
+        } as OpenClawConfig,
+        {
+          Provider: "vk",
+          Surface: "vk",
+        },
+        {
+          channel: "vk",
+          channelId: "vk",
+          surface: "vk",
+        },
+      );
+    params.skillCommands = [];
+
+    const result = await handleCommandsListCommand(params, true);
+
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Commands (2/");
+    expect(result?.reply?.channelData).toEqual({
+      vk: {
+        buttons: [[{ text: expect.stringMatching(/^2\//), callback_data: "/commands 2" }]],
+      },
+    });
   });
 });

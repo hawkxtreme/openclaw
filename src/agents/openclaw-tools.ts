@@ -48,6 +48,19 @@ const defaultOpenClawToolsDeps: OpenClawToolsDeps = {
 
 let openClawToolsDeps: OpenClawToolsDeps = defaultOpenClawToolsDeps;
 
+function createIngressTimingTracer(scope: string, sessionKey?: string, fallbackId?: string) {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(
+      `[${scope}] ${step} session=${sessionKey ?? fallbackId ?? "(no-session)"} elapsedMs=${Date.now() - startedAt}`,
+    );
+  };
+}
+
 function isOpenAIProvider(provider?: string): boolean {
   const normalized = provider?.trim().toLowerCase();
   return normalized === "openai" || normalized === "openai-codex";
@@ -118,6 +131,11 @@ export function createOpenClawTools(
     allowGatewaySubagentBinding?: boolean;
   } & SpawnedToolContext,
 ): AnyAgentTool[] {
+  const traceIngress = createIngressTimingTracer(
+    "create-openclaw-tools",
+    options?.agentSessionKey,
+    options?.sessionId,
+  );
   const resolvedConfig = options?.config ?? openClawToolsDeps.config;
   const sessionAgentId = resolveSessionAgentId({
     sessionKey: options?.agentSessionKey,
@@ -145,6 +163,7 @@ export function createOpenClawTools(
     options?.sandboxRoot && options?.sandboxFsBridge
       ? { root: options.sandboxRoot, bridge: options.sandboxFsBridge }
       : undefined;
+  traceIngress("after-runtime-snapshots");
   const imageTool = options?.agentDir?.trim()
     ? createImageTool({
         config: options?.config,
@@ -155,6 +174,7 @@ export function createOpenClawTools(
         modelHasVision: options?.modelHasVision,
       })
     : null;
+  traceIngress(`after-createImageTool enabled=${imageTool ? "yes" : "no"}`);
   const imageGenerateTool = createImageGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -162,6 +182,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  traceIngress(`after-createImageGenerateTool enabled=${imageGenerateTool ? "yes" : "no"}`);
   const videoGenerateTool = createVideoGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -171,6 +192,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  traceIngress(`after-createVideoGenerateTool enabled=${videoGenerateTool ? "yes" : "no"}`);
   const musicGenerateTool = createMusicGenerateTool({
     config: options?.config,
     agentDir: options?.agentDir,
@@ -180,6 +202,7 @@ export function createOpenClawTools(
     sandbox,
     fsPolicy: options?.fsPolicy,
   });
+  traceIngress(`after-createMusicGenerateTool enabled=${musicGenerateTool ? "yes" : "no"}`);
   const pdfTool = options?.agentDir?.trim()
     ? createPdfTool({
         config: options?.config,
@@ -189,16 +212,19 @@ export function createOpenClawTools(
         fsPolicy: options?.fsPolicy,
       })
     : null;
+  traceIngress(`after-createPdfTool enabled=${pdfTool ? "yes" : "no"}`);
   const webSearchTool = createWebSearchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebSearch: runtimeWebTools?.search,
   });
+  traceIngress(`after-createWebSearchTool enabled=${webSearchTool ? "yes" : "no"}`);
   const webFetchTool = createWebFetchTool({
     config: options?.config,
     sandboxed: options?.sandboxed,
     runtimeWebFetch: runtimeWebTools?.fetch,
   });
+  traceIngress(`after-createWebFetchTool enabled=${webFetchTool ? "yes" : "no"}`);
   const messageTool = options?.disableMessageTool
     ? null
     : createMessageTool({
@@ -216,94 +242,127 @@ export function createOpenClawTools(
         requireExplicitTarget: options?.requireExplicitMessageTarget,
         requesterSenderId: options?.requesterSenderId ?? undefined,
       });
+  traceIngress(`after-createMessageTool enabled=${messageTool ? "yes" : "no"}`);
+  const canvasTool = createCanvasTool({ config: options?.config });
+  traceIngress("after-createCanvasTool");
+  const nodesTool = createNodesTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    currentChannelId: options?.currentChannelId,
+    currentThreadTs: options?.currentThreadTs,
+    config: options?.config,
+    modelHasVision: options?.modelHasVision,
+    allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
+  });
+  traceIngress("after-createNodesTool");
+  const cronTool = createCronTool({
+    agentSessionKey: options?.agentSessionKey,
+  });
+  traceIngress("after-createCronTool");
+  const ttsTool = createTtsTool({
+    agentChannel: options?.agentChannel,
+    config: options?.config,
+  });
+  traceIngress("after-createTtsTool");
+  const gatewayTool = createGatewayTool({
+    agentSessionKey: options?.agentSessionKey,
+    config: options?.config,
+  });
+  traceIngress("after-createGatewayTool");
+  const agentsListTool = createAgentsListTool({
+    agentSessionKey: options?.agentSessionKey,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
+  });
+  traceIngress("after-createAgentsListTool");
+  const updatePlanTool =
+    isExperimentalPlanToolEnabled(resolvedConfig) || isOpenAIProvider(options?.modelProvider)
+      ? createUpdatePlanTool()
+      : null;
+  traceIngress(`after-createUpdatePlanTool enabled=${updatePlanTool ? "yes" : "no"}`);
+  const sessionsListTool = createSessionsListTool({
+    agentSessionKey: options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
+    config: resolvedConfig,
+    callGateway: openClawToolsDeps.callGateway,
+  });
+  traceIngress("after-createSessionsListTool");
+  const sessionsHistoryTool = createSessionsHistoryTool({
+    agentSessionKey: options?.agentSessionKey,
+    sandboxed: options?.sandboxed,
+    config: resolvedConfig,
+    callGateway: openClawToolsDeps.callGateway,
+  });
+  traceIngress("after-createSessionsHistoryTool");
+  const sessionsSendTool = createSessionsSendTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    sandboxed: options?.sandboxed,
+    config: resolvedConfig,
+    callGateway: openClawToolsDeps.callGateway,
+  });
+  traceIngress("after-createSessionsSendTool");
+  const sessionsYieldTool = createSessionsYieldTool({
+    sessionId: options?.sessionId,
+    onYield: options?.onYield,
+  });
+  traceIngress("after-createSessionsYieldTool");
+  const sessionsSpawnTool = createSessionsSpawnTool({
+    agentSessionKey: options?.agentSessionKey,
+    agentChannel: options?.agentChannel,
+    agentAccountId: options?.agentAccountId,
+    agentTo: options?.agentTo,
+    agentThreadId: options?.agentThreadId,
+    agentGroupId: options?.agentGroupId,
+    agentGroupChannel: options?.agentGroupChannel,
+    agentGroupSpace: options?.agentGroupSpace,
+    sandboxed: options?.sandboxed,
+    requesterAgentIdOverride: options?.requesterAgentIdOverride,
+    workspaceDir: spawnWorkspaceDir,
+  });
+  traceIngress("after-createSessionsSpawnTool");
+  const subagentsTool = createSubagentsTool({
+    agentSessionKey: options?.agentSessionKey,
+  });
+  traceIngress("after-createSubagentsTool");
+  const sessionStatusTool = createSessionStatusTool({
+    agentSessionKey: options?.agentSessionKey,
+    config: resolvedConfig,
+    sandboxed: options?.sandboxed,
+  });
+  traceIngress("after-createSessionStatusTool");
   const tools: AnyAgentTool[] = [
-    createCanvasTool({ config: options?.config }),
-    createNodesTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      currentChannelId: options?.currentChannelId,
-      currentThreadTs: options?.currentThreadTs,
-      config: options?.config,
-      modelHasVision: options?.modelHasVision,
-      allowMediaInvokeCommands: options?.allowMediaInvokeCommands,
-    }),
-    createCronTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
+    canvasTool,
+    nodesTool,
+    cronTool,
     ...(messageTool ? [messageTool] : []),
-    createTtsTool({
-      agentChannel: options?.agentChannel,
-      config: options?.config,
-    }),
+    ttsTool,
     ...(imageGenerateTool ? [imageGenerateTool] : []),
     ...(musicGenerateTool ? [musicGenerateTool] : []),
     ...(videoGenerateTool ? [videoGenerateTool] : []),
-    createGatewayTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: options?.config,
-    }),
-    createAgentsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-    }),
-    ...(isExperimentalPlanToolEnabled(resolvedConfig) || isOpenAIProvider(options?.modelProvider)
-      ? [createUpdatePlanTool()]
-      : []),
-    createSessionsListTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsHistoryTool({
-      agentSessionKey: options?.agentSessionKey,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsSendTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      sandboxed: options?.sandboxed,
-      config: resolvedConfig,
-      callGateway: openClawToolsDeps.callGateway,
-    }),
-    createSessionsYieldTool({
-      sessionId: options?.sessionId,
-      onYield: options?.onYield,
-    }),
-    createSessionsSpawnTool({
-      agentSessionKey: options?.agentSessionKey,
-      agentChannel: options?.agentChannel,
-      agentAccountId: options?.agentAccountId,
-      agentTo: options?.agentTo,
-      agentThreadId: options?.agentThreadId,
-      agentGroupId: options?.agentGroupId,
-      agentGroupChannel: options?.agentGroupChannel,
-      agentGroupSpace: options?.agentGroupSpace,
-      sandboxed: options?.sandboxed,
-      requesterAgentIdOverride: options?.requesterAgentIdOverride,
-      workspaceDir: spawnWorkspaceDir,
-    }),
-    createSubagentsTool({
-      agentSessionKey: options?.agentSessionKey,
-    }),
-    createSessionStatusTool({
-      agentSessionKey: options?.agentSessionKey,
-      config: resolvedConfig,
-      sandboxed: options?.sandboxed,
-    }),
+    gatewayTool,
+    agentsListTool,
+    ...(updatePlanTool ? [updatePlanTool] : []),
+    sessionsListTool,
+    sessionsHistoryTool,
+    sessionsSendTool,
+    sessionsYieldTool,
+    sessionsSpawnTool,
+    subagentsTool,
+    sessionStatusTool,
     ...(webSearchTool ? [webSearchTool] : []),
     ...(webFetchTool ? [webFetchTool] : []),
     ...(imageTool ? [imageTool] : []),
     ...(pdfTool ? [pdfTool] : []),
   ];
+  traceIngress(`after-core-openclaw-tools total=${tools.length}`);
 
   if (options?.disablePluginTools) {
+    traceIngress("skip-plugin-tools");
     return tools;
   }
 
+  traceIngress("before-resolvePluginTools");
   const pluginTools = resolvePluginTools({
     ...resolveOpenClawPluginToolInputs({
       options,
@@ -313,11 +372,13 @@ export function createOpenClawTools(
     existingToolNames: new Set(tools.map((tool) => tool.name)),
     toolAllowlist: options?.pluginToolAllowlist,
   });
+  traceIngress(`after-resolvePluginTools total=${pluginTools.length}`);
 
   const wrappedPluginTools = applyPluginToolDeliveryDefaults({
     tools: pluginTools,
     deliveryContext,
   });
+  traceIngress(`after-applyPluginToolDeliveryDefaults total=${wrappedPluginTools.length}`);
 
   return [...tools, ...wrappedPluginTools];
 }

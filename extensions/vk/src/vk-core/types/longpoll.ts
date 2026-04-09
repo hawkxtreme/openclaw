@@ -27,6 +27,7 @@ export type VkInboundMessage = {
   text: string;
   formatData?: VkFormatData;
   messagePayload?: unknown;
+  editConversationMessageId?: string;
   createdAt: number;
   isGroupChat: boolean;
   rawUpdate: unknown;

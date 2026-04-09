@@ -1,10 +1,17 @@
-export type VkFormatDataType = "bold" | "italic";
+export type VkFormatDataType = "bold" | "italic" | "underline" | "url";
 
-export type VkFormatDataItem = {
-  offset: number;
-  length: number;
-  type: VkFormatDataType;
-};
+export type VkFormatDataItem =
+  | {
+      offset: number;
+      length: number;
+      type: "bold" | "italic" | "underline";
+    }
+  | {
+      offset: number;
+      length: number;
+      type: "url";
+      url: string;
+    };
 
 export type VkFormatData = {
   version: "1";
@@ -35,7 +42,7 @@ function normalizePositiveInteger(value: unknown): number | null {
 }
 
 function isVkFormatDataType(value: unknown): value is VkFormatDataType {
-  return value === "bold" || value === "italic";
+  return value === "bold" || value === "italic" || value === "underline" || value === "url";
 }
 
 export function parseVkFormatData(value: unknown): VkFormatData | undefined {
@@ -61,9 +68,23 @@ export function parseVkFormatData(value: unknown): VkFormatData | undefined {
     const offset = normalizePositiveInteger(item?.offset);
     const length = normalizePositiveInteger(item?.length);
     const type = item?.type;
+    const url = typeof item?.url === "string" ? item.url.trim() : undefined;
 
     if (offset === null || length === null || !isVkFormatDataType(type)) {
       return undefined;
+    }
+
+    if (type === "url") {
+      if (!url) {
+        return undefined;
+      }
+      items.push({
+        offset,
+        length,
+        type,
+        url,
+      });
+      continue;
     }
 
     items.push({

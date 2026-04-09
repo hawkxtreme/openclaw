@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { ChannelConfigRuntimeSchema } from "../channels/plugins/types.plugin.js";
-import { listBundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
+import { validateJsonSchemaValue } from "../plugins/schema-validator.js";
 import type { ChannelsConfig } from "./types.channels.js";
+import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { ChannelHeartbeatVisibilitySchema } from "./zod-schema.channels.js";
 import { ContextVisibilityModeSchema, GroupPolicySchema } from "./zod-schema.core.js";
 
@@ -18,19 +19,38 @@ let directChannelRuntimeSchemasCache: ReadonlyMap<string, ChannelConfigRuntimeSc
 function getDirectChannelRuntimeSchemas(): ReadonlyMap<string, ChannelConfigRuntimeSchema> {
   if (!directChannelRuntimeSchemasCache) {
     const runtimeMap = new Map<string, ChannelConfigRuntimeSchema>();
-    for (const entry of listBundledPluginMetadata({
-      includeChannelConfigs: true,
-      includeSyntheticChannelConfigs: true,
-    })) {
-      const channelConfigs = entry.manifest.channelConfigs;
-      if (!channelConfigs) {
+    for (const entry of GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA) {
+      if (!entry.channelId || runtimeMap.has(entry.channelId)) {
         continue;
       }
-      for (const [channelId, channelConfig] of Object.entries(channelConfigs)) {
-        if (channelConfig?.runtime && !runtimeMap.has(channelId)) {
-          runtimeMap.set(channelId, channelConfig.runtime);
-        }
-      }
+      runtimeMap.set(entry.channelId, {
+        safeParse(value) {
+          const result = validateJsonSchemaValue({
+            schema: entry.schema,
+            cacheKey: `bundled-channel:${entry.channelId}`,
+            value,
+            applyDefaults: true,
+          });
+          if (result.ok) {
+            return { success: true, data: result.value };
+          }
+          return {
+            success: false,
+            issues: result.errors.map((error) => ({
+              path:
+                error.path === "<root>"
+                  ? []
+                  : error.path.split(".").map((segment) => {
+                      const parsed = Number.parseInt(segment, 10);
+                      return Number.isFinite(parsed) && String(parsed) === segment
+                        ? parsed
+                        : segment;
+                    }),
+              message: error.message,
+            })),
+          };
+        },
+      });
     }
     directChannelRuntimeSchemasCache = runtimeMap;
   }

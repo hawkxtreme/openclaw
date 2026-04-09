@@ -1,5 +1,6 @@
 import type { FinalizedMsgContext } from "../auto-reply/templating.js";
 import type { ChannelId } from "../channels/plugins/types.js";
+import type { TypingCallbacks } from "../channels/typing.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   readStoreAllowFromForDmPolicy,
@@ -246,6 +247,7 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
   deliver: (payload: OutboundReplyPayload) => Promise<void>;
   onRecordError: (err: unknown) => void;
   onDispatchError: (err: unknown, info: { kind: string }) => void;
+  typingCallbacks?: TypingCallbacks;
 }): Promise<{
   route: DirectDmRoute;
   storePath: string;
@@ -304,6 +306,7 @@ export async function dispatchInboundDirectDmWithRuntime(params: {
     deliver: params.deliver,
     onRecordError: params.onRecordError,
     onDispatchError: params.onDispatchError,
+    typingCallbacks: params.typingCallbacks,
   });
 
   return {

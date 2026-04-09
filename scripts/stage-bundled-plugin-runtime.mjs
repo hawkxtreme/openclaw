@@ -35,7 +35,16 @@ function ensureSymlink(targetValue, targetPath, type) {
 }
 
 function symlinkPath(sourcePath, targetPath, type) {
-  ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  try {
+    ensureSymlink(relativeSymlinkTarget(sourcePath, targetPath), targetPath, type);
+  } catch (error) {
+    if (error?.code !== "EPERM" && error?.code !== "EACCES") {
+      throw error;
+    }
+    // Some Windows environments disallow file symlinks without developer mode
+    // or elevated privileges. Copy the artifact so runtime staging stays complete.
+    fs.copyFileSync(sourcePath, targetPath);
+  }
 }
 
 function shouldWrapRuntimeJsFile(sourcePath) {

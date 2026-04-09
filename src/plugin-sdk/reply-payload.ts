@@ -1,3 +1,4 @@
+import type { ReplyPayload } from "../auto-reply/types.js";
 import type { ChannelOutboundAdapter } from "../channels/plugins/types.js";
 
 export type { MediaPayload, MediaPayloadInput } from "../channels/plugins/media-payload.js";
@@ -8,6 +9,8 @@ export type OutboundReplyPayload = {
   mediaUrls?: string[];
   mediaUrl?: string;
   replyToId?: string;
+  interactive?: ReplyPayload["interactive"];
+  channelData?: ReplyPayload["channelData"];
 };
 
 export type SendableOutboundReplyParts = {
@@ -39,11 +42,21 @@ export function normalizeOutboundReplyPayload(
     : undefined;
   const mediaUrl = typeof payload.mediaUrl === "string" ? payload.mediaUrl : undefined;
   const replyToId = typeof payload.replyToId === "string" ? payload.replyToId : undefined;
+  const interactive =
+    payload.interactive && typeof payload.interactive === "object" && !Array.isArray(payload.interactive)
+      ? (payload.interactive as ReplyPayload["interactive"])
+      : undefined;
+  const channelData =
+    payload.channelData && typeof payload.channelData === "object" && !Array.isArray(payload.channelData)
+      ? (payload.channelData as ReplyPayload["channelData"])
+      : undefined;
   return {
     text,
     mediaUrls,
     mediaUrl,
     replyToId,
+    interactive,
+    channelData,
   };
 }
 

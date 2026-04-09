@@ -1,16 +1,38 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { importFreshModule } from "../../test/helpers/import-fresh.ts";
-import type { BundledPluginMetadata } from "../plugins/bundled-plugin-metadata.js";
 
-const listBundledPluginMetadataMock = vi.hoisted(() =>
-  vi.fn<(options?: unknown) => readonly BundledPluginMetadata[]>(() => []),
+const validateJsonSchemaValueMock = vi.hoisted(() =>
+  vi.fn((params: { value: unknown }) => ({
+    ok: true as const,
+    value: params.value,
+  })),
 );
 
 describe("ChannelsSchema bundled runtime loading", () => {
   beforeEach(() => {
-    listBundledPluginMetadataMock.mockClear();
-    vi.doMock("../plugins/bundled-plugin-metadata.js", () => ({
-      listBundledPluginMetadata: (options?: unknown) => listBundledPluginMetadataMock(options),
+    validateJsonSchemaValueMock.mockClear();
+    vi.doMock("../plugins/schema-validator.js", () => ({
+      validateJsonSchemaValue: (params: unknown) => validateJsonSchemaValueMock(params as never),
+    }));
+    vi.doMock("./bundled-channel-config-metadata.generated.js", () => ({
+      GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA: [
+        {
+          pluginId: "discord",
+          channelId: "discord",
+          label: "Discord",
+          description: "Discord channel",
+          schema: {
+            type: "object",
+            properties: {
+              dmPolicy: {
+                type: "string",
+                default: "pairing",
+              },
+            },
+            additionalProperties: true,
+          },
+        },
+      ],
     }));
   });
 
@@ -32,28 +54,10 @@ describe("ChannelsSchema bundled runtime loading", () => {
     });
 
     expect(parsed?.defaults?.groupPolicy).toBe("open");
-    expect(listBundledPluginMetadataMock).not.toHaveBeenCalledWith(
-      expect.objectContaining({
-        includeChannelConfigs: true,
-      }),
-    );
+    expect(validateJsonSchemaValueMock).not.toHaveBeenCalled();
   });
 
-  it("loads bundled channel runtime discovery only when plugin-owned channel config is present", async () => {
-    listBundledPluginMetadataMock.mockReturnValueOnce([
-      {
-        manifest: {
-          channelConfigs: {
-            discord: {
-              runtime: {
-                safeParse: (value: unknown) => ({ success: true, data: value }),
-              },
-            },
-          },
-        },
-      } as unknown as BundledPluginMetadata,
-    ]);
-
+  it("validates plugin-owned channel config from generated bundled metadata", async () => {
     const runtime = await importFreshModule<typeof import("./zod-schema.providers.js")>(
       import.meta.url,
       "./zod-schema.providers.js?scope=channels-plugin-owned",
@@ -63,11 +67,12 @@ describe("ChannelsSchema bundled runtime loading", () => {
       discord: {},
     });
 
-    expect(listBundledPluginMetadataMock.mock.calls).toContainEqual([
+    expect(validateJsonSchemaValueMock).toHaveBeenCalledWith(
       expect.objectContaining({
-        includeChannelConfigs: true,
-        includeSyntheticChannelConfigs: true,
+        cacheKey: "bundled-channel:discord",
+        applyDefaults: true,
+        value: {},
       }),
-    ]);
+    );
   });
 });

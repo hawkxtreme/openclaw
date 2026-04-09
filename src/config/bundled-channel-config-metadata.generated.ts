@@ -14769,6 +14769,251 @@ export const GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA = [
     },
   },
   {
+    pluginId: "vk",
+    channelId: "vk",
+    label: "VK",
+    description:
+      "VK community bot for direct messages and group chats with buttons, media, and official transports.",
+    schema: {
+      $schema: "http://json-schema.org/draft-07/schema#",
+      type: "object",
+      properties: {
+        enabled: {
+          type: "boolean",
+        },
+        name: {
+          type: "string",
+        },
+        groupId: {
+          type: "integer",
+          exclusiveMinimum: 0,
+          maximum: 9007199254740991,
+        },
+        accessToken: {
+          type: "string",
+        },
+        tokenFile: {
+          type: "string",
+        },
+        transport: {
+          default: "callback-api",
+          type: "string",
+          enum: ["callback-api", "long-poll"],
+        },
+        apiVersion: {
+          type: "string",
+        },
+        callback: {
+          type: "object",
+          properties: {
+            path: {
+              type: "string",
+            },
+            secret: {
+              type: "string",
+            },
+            confirmationCode: {
+              type: "string",
+            },
+          },
+          additionalProperties: false,
+        },
+        dmPolicy: {
+          default: "pairing",
+          type: "string",
+          enum: ["open", "allowlist", "pairing", "disabled"],
+        },
+        allowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groupPolicy: {
+          default: "disabled",
+          type: "string",
+          enum: ["open", "allowlist", "disabled"],
+        },
+        groupAllowFrom: {
+          type: "array",
+          items: {
+            anyOf: [
+              {
+                type: "string",
+              },
+              {
+                type: "number",
+              },
+            ],
+          },
+        },
+        groups: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              requireMention: {
+                type: "boolean",
+              },
+            },
+            additionalProperties: false,
+          },
+        },
+        accounts: {
+          type: "object",
+          propertyNames: {
+            type: "string",
+          },
+          additionalProperties: {
+            type: "object",
+            properties: {
+              enabled: {
+                type: "boolean",
+              },
+              name: {
+                type: "string",
+              },
+              groupId: {
+                type: "integer",
+                exclusiveMinimum: 0,
+                maximum: 9007199254740991,
+              },
+              accessToken: {
+                type: "string",
+              },
+              tokenFile: {
+                type: "string",
+              },
+              transport: {
+                default: "callback-api",
+                type: "string",
+                enum: ["callback-api", "long-poll"],
+              },
+              apiVersion: {
+                type: "string",
+              },
+              callback: {
+                type: "object",
+                properties: {
+                  path: {
+                    type: "string",
+                  },
+                  secret: {
+                    type: "string",
+                  },
+                  confirmationCode: {
+                    type: "string",
+                  },
+                },
+                additionalProperties: false,
+              },
+              dmPolicy: {
+                default: "pairing",
+                type: "string",
+                enum: ["open", "allowlist", "pairing", "disabled"],
+              },
+              allowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groupPolicy: {
+                default: "disabled",
+                type: "string",
+                enum: ["open", "allowlist", "disabled"],
+              },
+              groupAllowFrom: {
+                type: "array",
+                items: {
+                  anyOf: [
+                    {
+                      type: "string",
+                    },
+                    {
+                      type: "number",
+                    },
+                  ],
+                },
+              },
+              groups: {
+                type: "object",
+                propertyNames: {
+                  type: "string",
+                },
+                additionalProperties: {
+                  type: "object",
+                  properties: {
+                    enabled: {
+                      type: "boolean",
+                    },
+                    allowFrom: {
+                      type: "array",
+                      items: {
+                        anyOf: [
+                          {
+                            type: "string",
+                          },
+                          {
+                            type: "number",
+                          },
+                        ],
+                      },
+                    },
+                    requireMention: {
+                      type: "boolean",
+                    },
+                  },
+                  additionalProperties: false,
+                },
+              },
+            },
+            required: ["transport", "dmPolicy", "groupPolicy"],
+            additionalProperties: false,
+          },
+        },
+        defaultAccount: {
+          type: "string",
+        },
+      },
+      required: ["transport", "dmPolicy", "groupPolicy"],
+      additionalProperties: false,
+    },
+  },
+  {
     pluginId: "whatsapp",
     channelId: "whatsapp",
     label: "WhatsApp",

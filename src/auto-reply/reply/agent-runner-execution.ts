@@ -484,6 +484,16 @@ export async function runAgentTurnWithFallback(params: {
   storePath?: string;
   resolvedVerboseLevel: VerboseLevel;
 }): Promise<AgentRunLoopResult> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[run-agent-turn] ${step} session=${params.sessionKey ?? params.followupRun.run.sessionId ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
   const TRANSIENT_HTTP_RETRY_DELAY_MS = 2_500;
   let didLogHeartbeatStrip = false;
   let autoCompactionCount = 0;
@@ -671,10 +681,12 @@ export async function runAgentTurnWithFallback(params: {
           })
         : undefined;
       const onToolResult = params.opts?.onToolResult;
+      traceIngress("before-runWithModelFallback");
       const fallbackResult = await runWithModelFallback({
         ...resolveModelFallbackOptions(params.followupRun.run),
         runId,
         run: async (provider, model, runOptions) => {
+          traceIngress(`fallback-run:start provider=${provider} model=${model}`);
           // Notify that model selection is complete (including after fallback).
           // This allows responsePrefix template interpolation with the actual model.
           params.opts?.onModelSelected?.({
@@ -694,6 +706,9 @@ export async function runAgentTurnWithFallback(params: {
             );
           }
 
+          traceIngress(
+            `fallback-run:before-buildEmbeddedRunExecutionParams provider=${provider} model=${model}`,
+          );
           const { embeddedContext, senderContext, runBaseParams } = buildEmbeddedRunExecutionParams(
             {
               run: params.followupRun.run,
@@ -705,9 +720,13 @@ export async function runAgentTurnWithFallback(params: {
               model,
             },
           );
+          traceIngress(
+            `fallback-run:after-buildEmbeddedRunExecutionParams provider=${provider} model=${model}`,
+          );
           return (async () => {
             let attemptCompactionCount = 0;
             try {
+              traceIngress(`fallback-run:before-runEmbeddedPiAgent provider=${provider} model=${model}`);
               const result = await runEmbeddedPiAgent({
                 ...embeddedContext,
                 allowGatewaySubagentBinding: true,
@@ -975,6 +994,7 @@ export async function runAgentTurnWithFallback(params: {
                     })()
                   : undefined,
               });
+              traceIngress(`fallback-run:after-runEmbeddedPiAgent provider=${provider} model=${model}`);
               bootstrapPromptWarningSignaturesSeen = resolveBootstrapWarningSignaturesSeen(
                 result.meta?.systemPromptReport,
               );
@@ -994,6 +1014,7 @@ export async function runAgentTurnWithFallback(params: {
                   );
                 }
               }
+              traceIngress(`fallback-run:error provider=${provider} model=${model}`);
               throw err;
             } finally {
               autoCompactionCount += attemptCompactionCount;
@@ -1001,6 +1022,7 @@ export async function runAgentTurnWithFallback(params: {
           })();
         },
       });
+      traceIngress("after-runWithModelFallback");
       runResult = fallbackResult.result;
       fallbackProvider = fallbackResult.provider;
       fallbackModel = fallbackResult.model;

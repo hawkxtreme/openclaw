@@ -8,6 +8,32 @@ describe("vk plugin adapters", () => {
     vi.unstubAllGlobals();
   });
 
+  function createVkApiFetchMock(params: {
+    sendResponse?: number;
+    historyItems?: unknown[];
+    onSend?: (url: URL) => void;
+  }) {
+    return vi.fn(async (input: string | URL) => {
+      const url = new URL(String(input));
+      if (url.pathname === "/method/messages.getHistory") {
+        return new Response(
+          JSON.stringify({
+            response: {
+              items: params.historyItems ?? [],
+            },
+          }),
+        );
+      }
+
+      params.onSend?.(url);
+      return new Response(
+        JSON.stringify({
+          response: params.sendResponse ?? 9000,
+        }),
+      );
+    });
+  }
+
   it("normalizes vk targets and resolves outbound session routes", () => {
     expect(vkMessagingAdapter.normalizeTarget?.("vk:user:42")).toBe("42");
     expect(vkMessagingAdapter.normalizeTarget?.("conversation:2000000123")).toBe(
@@ -111,15 +137,13 @@ describe("vk plugin adapters", () => {
   });
 
   it("renders VK keyboards from interactive outbound payloads", async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const url = new URL(String(input));
-      expect(url).toBeDefined();
-      expect(url.searchParams.get("keyboard")).toBeTruthy();
-      return new Response(
-        JSON.stringify({
-          response: 9002,
-        }),
-      );
+    const fetchMock = createVkApiFetchMock({
+      sendResponse: 9002,
+      onSend: (url) => {
+        if (url.pathname === "/method/messages.send") {
+          expect(url.searchParams.get("keyboard")).toBeTruthy();
+        }
+      },
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -157,26 +181,82 @@ describe("vk plugin adapters", () => {
       messageId: "9002",
       conversationId: "42",
     });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
   });
 
   it("builds VK command keyboards for model navigation", () => {
+    const commandsData = vkPlugin.commands?.buildCommandsListChannelData?.({
+      currentPage: 1,
+      totalPages: 1,
+    });
+    expect(commandsData).toEqual({
+      vk: {
+        inline: true,
+        oneTime: false,
+        buttons: [
+          [
+            { text: "Models", callback_data: "/models" },
+            { text: "Status", callback_data: "/status" },
+          ],
+          [
+            { text: "Tools", callback_data: "/tools" },
+            { text: "Help", callback_data: "/help" },
+          ],
+        ],
+      },
+    });
+
     const providerData = vkPlugin.commands?.buildModelsProviderChannelData?.({
       providers: [
         { id: "anthropic", count: 2 },
         { id: "openai", count: 5 },
       ],
+      currentPage: 1,
+      totalPages: 2,
     });
     expect(providerData).toEqual({
       vk: {
+        inline: true,
+        oneTime: false,
         buttons: [
           [
             { text: "anthropic (2)", callback_data: "/models anthropic" },
             { text: "openai (5)", callback_data: "/models openai" },
           ],
+          [{ text: "Next >", callback_data: "/models 2" }],
         ],
       },
     });
+
+    const midPageProviderData = vkPlugin.commands?.buildModelsProviderChannelData?.({
+      providers: [
+        { id: "google-antigravity", count: 9 },
+        { id: "google-gemini-cli", count: 6 },
+        { id: "google-vertex", count: 13 },
+        { id: "groq", count: 18 },
+        { id: "huggingface", count: 18 },
+        { id: "kimi", count: 2 },
+        { id: "minimax", count: 2 },
+        { id: "minimax-cn", count: 2 },
+      ],
+      currentPage: 2,
+      totalPages: 4,
+    });
+    const midPageProviderButtons = (
+      midPageProviderData as { vk?: { buttons?: Array<Array<{ text: string }>> } }
+    )?.vk?.buttons;
+    expect(midPageProviderButtons?.flat().map((button) => button.text)).toEqual([
+      "google-antigravity (9)",
+      "google-gemini-cli (6)",
+      "google-vertex (13)",
+      "groq (18)",
+      "huggingface (18)",
+      "kimi (2)",
+      "minimax (2)",
+      "minimax-cn (2)",
+      "< Prev",
+      "Next >",
+    ]);
 
     const listData = vkPlugin.commands?.buildModelsListChannelData?.({
       provider: "openai",
@@ -192,22 +272,137 @@ describe("vk plugin adapters", () => {
     });
     expect(listData).toEqual({
       vk: {
+        inline: true,
+        oneTime: false,
         buttons: [
-          [{ text: "GPT-5.4 ✓", callback_data: "/model openai/gpt-5.4" }],
-          [{ text: "GPT-5.2 Codex", callback_data: "/model openai/gpt-5.2-codex" }],
           [
-            { text: "1/2", callback_data: "/models openai 1" },
-            { text: "Next >", callback_data: "/models openai 2" },
+            { text: "GPT-5.4 ✓", callback_data: "/model openai/gpt-5.4" },
+            { text: "GPT-5.2 Codex", callback_data: "/model openai/gpt-5.2-codex" },
           ],
+          [{ text: "Next >", callback_data: "/models openai 2" }],
           [{ text: "< Back", callback_data: "/models" }],
         ],
       },
     });
 
+    const midPageListData = vkPlugin.commands?.buildModelsListChannelData?.({
+      provider: "openai",
+      models: [
+        "gpt-5.4",
+        "gpt-5.2-codex",
+        "o3",
+        "o4-mini",
+        "o4",
+        "gpt-4.1",
+        "gpt-4.1-mini",
+        "gpt-4.1-nano",
+        "gpt-4o",
+      ],
+      currentPage: 2,
+      totalPages: 2,
+      pageSize: 6,
+    });
+    const midPageListButtons = (
+      midPageListData as { vk?: { buttons?: Array<Array<{ text: string }>> } }
+    )?.vk?.buttons;
+    expect(midPageListButtons?.flat().map((button) => button.text)).toEqual([
+      "gpt-4.1-mini",
+      "gpt-4.1-nano",
+      "gpt-4o",
+      "< Prev",
+      "< Back",
+    ]);
+
     expect(vkPlugin.commands?.buildModelBrowseChannelData?.()).toEqual({
       vk: {
+        inline: true,
+        oneTime: false,
         buttons: [[{ text: "Browse providers", callback_data: "/models" }]],
       },
+    });
+  });
+
+  it("sends command keyboards as inline callback buttons on callback-api accounts", async () => {
+    const fetchMock = createVkApiFetchMock({
+      sendResponse: 9006,
+      onSend: (url) => {
+        if (url.pathname === "/method/messages.send") {
+          const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
+          expect(keyboard.inline).toBe(true);
+          expect(keyboard.one_time).toBe(false);
+          expect(keyboard.buttons[0][0].action.type).toBe("callback");
+          expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
+        }
+      },
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await vkOutboundAdapter.sendPayload?.({
+      cfg: {
+        channels: {
+          vk: {
+            groupId: 77,
+            transport: "callback-api",
+            accessToken: "replace-me-callback-token",
+          },
+        },
+      },
+      to: "vk:42",
+      payload: {
+        text: "Choose a model",
+        channelData: vkPlugin.commands?.buildModelBrowseChannelData?.(),
+      },
+      accountId: "default",
+      text: "",
+    });
+
+    expect(result).toMatchObject({
+      channel: "vk",
+      messageId: "9006",
+      conversationId: "42",
+    });
+  });
+
+  it("falls back to chat text buttons for command keyboards on long-poll accounts", async () => {
+    const fetchMock = createVkApiFetchMock({
+      sendResponse: 9007,
+      onSend: (url) => {
+        if (url.pathname === "/method/messages.send") {
+          const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
+          expect(keyboard.inline ?? false).toBe(false);
+          expect(keyboard.one_time).toBe(false);
+          expect(keyboard.buttons[0][0].action.type).toBe("text");
+          expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
+        }
+      },
+    });
+
+    vi.stubGlobal("fetch", fetchMock);
+
+    const result = await vkOutboundAdapter.sendPayload?.({
+      cfg: {
+        channels: {
+          vk: {
+            groupId: 77,
+            transport: "long-poll",
+            accessToken: "replace-me-callback-token",
+          },
+        },
+      },
+      to: "vk:42",
+      payload: {
+        text: "Choose a model",
+        channelData: vkPlugin.commands?.buildModelBrowseChannelData?.(),
+      },
+      accountId: "default",
+      text: "",
+    });
+
+    expect(result).toMatchObject({
+      channel: "vk",
+      messageId: "9007",
+      conversationId: "42",
     });
   });
 
@@ -245,15 +440,14 @@ describe("vk plugin adapters", () => {
   });
 
   it("sends VK message-tool buttons through the plugin action adapter", async () => {
-    const fetchMock = vi.fn(async (input: string | URL) => {
-      const url = new URL(String(input));
-      expect(url.searchParams.get("peer_id")).toBe("42");
-      expect(url.searchParams.get("keyboard")).toBeTruthy();
-      return new Response(
-        JSON.stringify({
-          response: 9003,
-        }),
-      );
+    const fetchMock = createVkApiFetchMock({
+      sendResponse: 9003,
+      onSend: (url) => {
+        if (url.pathname === "/method/messages.send") {
+          expect(url.searchParams.get("peer_id")).toBe("42");
+          expect(url.searchParams.get("keyboard")).toBeTruthy();
+        }
+      },
     });
 
     vi.stubGlobal("fetch", fetchMock);
@@ -277,7 +471,7 @@ describe("vk plugin adapters", () => {
       accountId: "default",
     });
 
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
     const jsonText = result?.content.find((entry) => entry.type === "text")?.text;
     expect(jsonText).toBeTruthy();
     expect(JSON.parse(jsonText ?? "{}")).toMatchObject({

@@ -13,6 +13,18 @@ import type {
   VkFormattedText,
 } from "./vk-core/types/format.js";
 
+type VkRenderableStyle = MarkdownStyle | "underline";
+type VkRenderableStyleSpan = {
+  start: number;
+  end: number;
+  style: VkRenderableStyle;
+};
+type VkRenderableLinkSpan = {
+  start: number;
+  end: number;
+  href: string;
+};
+
 type VkInboundBodySource = {
   text: string;
   messagePayload?: unknown;
@@ -22,24 +34,27 @@ const MARKDOWN_TABLE_ROW_PATTERN = /^\s*\|(.+)\|\s*$/;
 const MARKDOWN_TABLE_SEPARATOR_PATTERN = /^:?-{3,}:?$/;
 
 const VK_FALLBACK_STYLE_MARKERS = {
+  blockquote: { open: "[quote]", close: "[/quote]" },
   strikethrough: { open: "[S]", close: "[/S]" },
   code: { open: "`", close: "`" },
   code_block: { open: "[code]\n", close: "\n[/code]" },
+  spoiler: { open: "[spoiler]", close: "[/spoiler]" },
 } as const;
 
 type VkFallbackMarkerStyle = keyof typeof VK_FALLBACK_STYLE_MARKERS;
 
-const STYLE_ORDER: MarkdownStyle[] = [
+const STYLE_ORDER: VkRenderableStyle[] = [
   "blockquote",
   "code_block",
   "code",
   "bold",
   "italic",
+  "underline",
   "strikethrough",
   "spoiler",
 ];
 
-const STYLE_RANK = new Map<MarkdownStyle, number>(
+const STYLE_RANK = new Map<VkRenderableStyle, number>(
   STYLE_ORDER.map((style, index) => [style, index]),
 );
 
@@ -47,14 +62,13 @@ type VkOpeningItem =
   | {
       kind: "link";
       end: number;
-      open: string;
-      close: string;
+      href: string;
       index: number;
     }
   | {
       kind: "style";
       end: number;
-      style: MarkdownStyle;
+      style: VkRenderableStyle;
       marker?: { open: string; close: string };
       nativeType?: VkFormatDataType;
       index: number;
@@ -71,6 +85,7 @@ type VkStackItem =
       end: number;
       style: VkFormatDataType;
       startOffset: number;
+      url?: string;
     };
 
 function normalizeVkFormatItems(items: VkFormatDataItem[]): VkFormatData | undefined {
@@ -93,7 +108,7 @@ function normalizeVkFormatItems(items: VkFormatDataItem[]): VkFormatData | undef
 }
 
 function resolveVkLinkFallback(
-  link: MarkdownLinkSpan,
+  link: VkRenderableLinkSpan,
   plainText: string,
 ): VkOpeningItem | null {
   const href = link.href.trim();
@@ -102,23 +117,22 @@ function resolveVkLinkFallback(
   }
 
   const label = plainText.slice(link.start, link.end).trim();
-  if (!label || label === href) {
+  if (!label) {
     return null;
   }
 
   return {
     kind: "link",
     end: link.end,
-    open: "",
-    close: ` (${href})`,
+    href,
     index: 0,
   };
 }
 
 function resolveVkNativeStyle(
-  style: MarkdownStyle,
+  style: VkRenderableStyle,
 ): VkFormatDataType | undefined {
-  if (style === "bold" || style === "italic") {
+  if (style === "bold" || style === "italic" || style === "underline") {
     return style;
   }
 
@@ -126,32 +140,164 @@ function resolveVkNativeStyle(
 }
 
 function resolveVkFallbackStyleMarker(
-  style: MarkdownStyle,
+  style: VkRenderableStyle,
 ): (typeof VK_FALLBACK_STYLE_MARKERS)[VkFallbackMarkerStyle] | undefined {
   switch (style) {
+    case "blockquote":
     case "strikethrough":
     case "code":
     case "code_block":
+    case "spoiler":
       return VK_FALLBACK_STYLE_MARKERS[style];
     default:
       return undefined;
   }
 }
 
+function extractVkHtmlHref(attributes: string): string | undefined {
+  const match = attributes.match(/\bhref\s*=\s*(?:"([^"]+)"|'([^']+)'|([^\s>]+))/iu);
+  const href = match?.[1] ?? match?.[2] ?? match?.[3];
+  return href?.trim() || undefined;
+}
+
+function remapSpanBoundary(map: number[], index: number): number {
+  return map[index] ?? map[map.length - 1] ?? 0;
+}
+
+function normalizeVkInlineHtml(ir: MarkdownIR): {
+  text: string;
+  styles: VkRenderableStyleSpan[];
+  links: VkRenderableLinkSpan[];
+} {
+  const sourceText = ir.text ?? "";
+  const tagPattern = /<(\/?)(strong|b|em|i|u|a)\b([^>]*)>/giu;
+  if (!sourceText.includes("<")) {
+    return {
+      text: sourceText,
+      styles: ir.styles.map((span) => ({ ...span })),
+      links: ir.links.map((link) => ({ ...link })),
+    };
+  }
+
+  const indexMap = new Array<number>(sourceText.length + 1).fill(0);
+  const htmlStyles: VkRenderableStyleSpan[] = [];
+  const htmlLinks: VkRenderableLinkSpan[] = [];
+  const styleStack = new Map<VkFormatDataType, number[]>();
+  const linkStack: Array<{ start: number; href: string }> = [];
+  let renderedText = "";
+  let cursor = 0;
+
+  const appendText = (start: number, end: number) => {
+    for (let index = start; index < end; index += 1) {
+      indexMap[index] = renderedText.length;
+      renderedText += sourceText[index] ?? "";
+    }
+    indexMap[end] = renderedText.length;
+  };
+
+  const skipTag = (start: number, end: number) => {
+    for (let index = start; index <= end; index += 1) {
+      indexMap[index] = renderedText.length;
+    }
+  };
+
+  for (const match of sourceText.matchAll(tagPattern)) {
+    const token = match[0];
+    const start = match.index ?? 0;
+    const end = start + token.length;
+    appendText(cursor, start);
+    skipTag(start, end);
+
+    const closing = match[1] === "/";
+    const tag = (match[2] ?? "").toLowerCase();
+    const attributes = match[3] ?? "";
+
+    const resolvedStyle =
+      tag === "strong" || tag === "b"
+        ? ("bold" as const)
+        : tag === "em" || tag === "i"
+          ? ("italic" as const)
+          : tag === "u"
+            ? ("underline" as const)
+            : undefined;
+
+    if (tag === "a") {
+      if (closing) {
+        const openLink = linkStack.pop();
+        if (openLink && renderedText.length > openLink.start) {
+          htmlLinks.push({
+            start: openLink.start,
+            end: renderedText.length,
+            href: openLink.href,
+          });
+        }
+      } else {
+        const href = extractVkHtmlHref(attributes);
+        if (href) {
+          linkStack.push({
+            start: renderedText.length,
+            href,
+          });
+        }
+      }
+    } else if (resolvedStyle) {
+      const bucket = styleStack.get(resolvedStyle) ?? [];
+      if (closing) {
+        const openStart = bucket.pop();
+        if (openStart !== undefined && renderedText.length > openStart) {
+          htmlStyles.push({
+            start: openStart,
+            end: renderedText.length,
+            style: resolvedStyle,
+          });
+        }
+      } else {
+        bucket.push(renderedText.length);
+      }
+      styleStack.set(resolvedStyle, bucket);
+    }
+
+    cursor = end;
+  }
+
+  appendText(cursor, sourceText.length);
+
+  return {
+    text: renderedText,
+    styles: [
+      ...ir.styles.map((span) => ({
+        start: remapSpanBoundary(indexMap, span.start),
+        end: remapSpanBoundary(indexMap, span.end),
+        style: span.style,
+      })),
+      ...htmlStyles,
+    ],
+    links: [
+      ...ir.links.map((link) => ({
+        start: remapSpanBoundary(indexMap, link.start),
+        end: remapSpanBoundary(indexMap, link.end),
+        href: link.href,
+      })),
+      ...htmlLinks,
+    ],
+  };
+}
+
 function buildVkFormattedText(ir: MarkdownIR): VkFormattedText {
-  const plainText = ir.text ?? "";
+  const normalized = normalizeVkInlineHtml(ir);
+  const plainText = normalized.text;
   if (!plainText) {
     return { text: "" };
   }
 
-  const relevantStyles = ir.styles.filter((span) => {
+  const relevantStyles = normalized.styles.filter((span) => {
     return (
       span.start !== span.end &&
       (resolveVkNativeStyle(span.style) !== undefined ||
         resolveVkFallbackStyleMarker(span.style) !== undefined)
     );
   });
-  const startsAt = new Map<number, MarkdownStyleSpan[]>();
+  const startsAt = new Map<number, VkRenderableStyleSpan[]>();
   const linkStarts = new Map<number, VkOpeningItem[]>();
   const boundaries = new Set<number>([0, plainText.length]);
 
@@ -175,7 +321,7 @@ function buildVkFormattedText(ir: MarkdownIR): VkFormattedText {
     });
   }
 
-  for (const [index, link] of ir.links.entries()) {
+  for (const [index, link] of normalized.links.entries()) {
     if (link.start === link.end) {
       continue;
     }
@@ -220,11 +366,22 @@ function buildVkFormattedText(ir: MarkdownIR): VkFormattedText {
 
       const length = renderedText.length - item.startOffset;
       if (length > 0) {
-        formatItems.push({
-          offset: item.startOffset,
-          length,
-          type: item.style,
-        });
+        if (item.style === "url") {
+          if (item.url) {
+            formatItems.push({
+              offset: item.startOffset,
+              length,
+              type: "url",
+              url: item.url,
+            });
+          }
+        } else {
+          formatItems.push({
+            offset: item.startOffset,
+            length,
+            type: item.style,
+          });
+        }
       }
     }
 
@@ -263,11 +420,12 @@ function buildVkFormattedText(ir: MarkdownIR): VkFormattedText {
 
     for (const item of openingItems) {
       if (item.kind === "link") {
-        renderedText += item.open;
         stack.push({
-          kind: "output",
+          kind: "native",
           end: item.end,
-          close: item.close,
+          style: "url",
+          startOffset: renderedText.length,
+          url: item.href,
         });
         continue;
       }
@@ -298,9 +456,94 @@ function buildVkFormattedText(ir: MarkdownIR): VkFormattedText {
     }
   }
 
-  return {
+  return trimVkMarkerInteriorWhitespace({
     text: renderedText,
     formatData: normalizeVkFormatItems(formatItems),
+  });
+}
+
+function remapVkOffset(offset: number, removals: readonly { start: number; end: number }[]): number {
+  let shifted = offset;
+  for (const removal of removals) {
+    const length = removal.end - removal.start;
+    if (shifted >= removal.end) {
+      shifted -= length;
+      continue;
+    }
+    if (shifted > removal.start) {
+      shifted = removal.start;
+    }
+    break;
+  }
+  return shifted;
+}
+
+function trimVkMarkerInteriorWhitespace(formatted: VkFormattedText): VkFormattedText {
+  if (!formatted.text.includes("[quote]")) {
+    return formatted;
+  }
+
+  const markerPattern = /\[quote\]([\s\S]*?)\[\/quote\]/gu;
+  const removals: Array<{ start: number; end: number }> = [];
+
+  for (const match of formatted.text.matchAll(markerPattern)) {
+    const content = match[1] ?? "";
+    if (!content) {
+      continue;
+    }
+
+    const fullMatch = match[0] ?? "";
+    const matchStart = match.index ?? 0;
+    const contentStart = matchStart + fullMatch.indexOf(content);
+    const leadingWhitespace = content.match(/^\s+/u)?.[0].length ?? 0;
+    const trailingWhitespace = content.match(/\s+$/u)?.[0].length ?? 0;
+
+    if (leadingWhitespace > 0) {
+      removals.push({
+        start: contentStart,
+        end: contentStart + leadingWhitespace,
+      });
+    }
+
+    if (trailingWhitespace > 0) {
+      removals.push({
+        start: contentStart + content.length - trailingWhitespace,
+        end: contentStart + content.length,
+      });
+    }
+  }
+
+  if (removals.length === 0) {
+    return formatted;
+  }
+
+  removals.sort((left, right) => left.start - right.start);
+  let text = formatted.text;
+  for (let index = removals.length - 1; index >= 0; index -= 1) {
+    const removal = removals[index];
+    text = `${text.slice(0, removal.start)}${text.slice(removal.end)}`;
+  }
+
+  const formatData = formatted.formatData
+    ? normalizeVkFormatItems(
+        formatted.formatData.items
+          .map((item) => {
+            const originalEnd = item.offset + item.length;
+            const nextOffset = remapVkOffset(item.offset, removals);
+            const nextEnd = remapVkOffset(originalEnd, removals);
+            return {
+              ...item,
+              offset: nextOffset,
+              length: Math.max(0, nextEnd - nextOffset),
+            };
+          })
+          .filter((item) => item.length > 0),
+      )
+    : undefined;
+
+  return {
+    text,
+    formatData,
   };
 }
 
@@ -359,7 +602,11 @@ function flattenMarkdownTables(text: string): string {
         .filter((entry): entry is string => Boolean(entry));
 
       if (pairs.length > 0) {
-        tableRows.push(`- ${pairs.join(", ")}`);
+        const [firstPair, ...restPairs] = pairs;
+        tableRows.push(`- ${firstPair}`);
+        for (const pair of restPairs) {
+          tableRows.push(`  ${pair}`);
+        }
       }
     }
 
@@ -404,8 +651,9 @@ export function formatVkOutboundMessage(text: string): VkFormattedText {
   const { ir } = markdownToIRWithMeta(flattenMarkdownTables(trimmed), {
     linkify: false,
     autolink: false,
-    headingStyle: "none",
-    blockquotePrefix: "> ",
+    enableSpoilers: true,
+    headingStyle: "bold",
+    blockquotePrefix: "",
     tableMode: "off",
   });
 

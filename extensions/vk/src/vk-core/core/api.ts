@@ -9,6 +9,7 @@ import type {
 } from "../types/longpoll.js";
 
 const VK_API_BASE = "https://api.vk.com/method";
+const VK_INTERACTIVE_HISTORY_COUNT = 50;
 
 type VkApiErrorResponse = {
   error: {
@@ -211,6 +212,179 @@ export async function sendVkMessage(params: {
   });
 
   return String(response);
+}
+
+export async function resolveVkConversationMessageIdForMessage(params: {
+  token: string;
+  peerId: number;
+  messageId: string | number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<string | undefined> {
+  const response = await vkApi<{
+    items?: unknown[];
+  }>({
+    token: params.token,
+    method: "messages.getHistory",
+    apiVersion: params.apiVersion,
+    query: {
+      peer_id: params.peerId,
+      count: 10,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
+  const targetMessageId = String(params.messageId).trim();
+  for (const item of response.items ?? []) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+    const record = item as {
+      id?: unknown;
+      conversation_message_id?: unknown;
+    };
+    if (String(record.id ?? "").trim() !== targetMessageId) {
+      continue;
+    }
+    const conversationMessageId = String(
+      record.conversation_message_id ?? "",
+    ).trim();
+    if (/^\d+$/u.test(conversationMessageId)) {
+      return conversationMessageId;
+    }
+  }
+
+  return undefined;
+}
+
+export async function resolveVkLatestInteractiveConversationMessageId(params: {
+  token: string;
+  peerId: number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<string | undefined> {
+  const response = await vkApi<{
+    items?: unknown[];
+  }>({
+    token: params.token,
+    method: "messages.getHistory",
+    apiVersion: params.apiVersion,
+    query: {
+      peer_id: params.peerId,
+      count: VK_INTERACTIVE_HISTORY_COUNT,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
+
+  return extractVkInteractiveMessageSummaries(response.items ?? [])[0]
+    ?.conversationMessageId;
+}
+
+export type VkInteractiveMessageSummary = {
+  conversationMessageId: string;
+  text?: string;
+};
+
+export function extractVkInteractiveMessageSummaries(
+  items: readonly unknown[],
+): VkInteractiveMessageSummary[] {
+  const result: VkInteractiveMessageSummary[] = [];
+
+  for (const item of items) {
+    if (typeof item !== "object" || item === null) {
+      continue;
+    }
+    const record = item as {
+      out?: unknown;
+      keyboard?: unknown;
+      conversation_message_id?: unknown;
+      text?: unknown;
+    };
+    if (record.out !== 1 || typeof record.keyboard !== "object" || record.keyboard === null) {
+      continue;
+    }
+    const conversationMessageId = String(
+      record.conversation_message_id ?? "",
+    ).trim();
+    if (/^\d+$/u.test(conversationMessageId)) {
+      result.push({
+        conversationMessageId,
+        text: typeof record.text === "string" ? record.text : undefined,
+      });
+    }
+  }
+
+  return result;
+}
+
+export async function listVkRecentInteractiveConversationMessageIds(params: {
+  token: string;
+  peerId: number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<string[]> {
+  const summaries = await listVkRecentInteractiveMessages(params);
+  return summaries.map((summary) => summary.conversationMessageId);
+}
+
+export async function listVkRecentInteractiveMessages(params: {
+  token: string;
+  peerId: number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<VkInteractiveMessageSummary[]> {
+  const response = await vkApi<{
+    items?: unknown[];
+  }>({
+    token: params.token,
+    method: "messages.getHistory",
+    apiVersion: params.apiVersion,
+    query: {
+      peer_id: params.peerId,
+      count: VK_INTERACTIVE_HISTORY_COUNT,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
+  return extractVkInteractiveMessageSummaries(response.items ?? []);
+}
+
+export async function editVkMessage(params: {
+  token: string;
+  peerId: number;
+  conversationMessageId: string | number;
+  message?: string;
+  formatData?: VkFormatData;
+  keyboard?: string;
+  disableMentions?: boolean;
+  dontParseLinks?: boolean;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<void> {
+  await vkApi<number>({
+    token: params.token,
+    method: "messages.edit",
+    apiVersion: params.apiVersion,
+    query: {
+      peer_id: params.peerId,
+      cmid: params.conversationMessageId,
+      message: params.message,
+      format_data: params.formatData
+        ? JSON.stringify(params.formatData)
+        : undefined,
+      keyboard: params.keyboard,
+      disable_mentions: params.disableMentions ? 1 : undefined,
+      dont_parse_links: params.dontParseLinks ? 1 : undefined,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
 }
 
 export async function setVkMessageActivity(params: {

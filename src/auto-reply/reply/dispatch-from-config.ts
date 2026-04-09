@@ -7,6 +7,7 @@ import {
 } from "../../bindings/records.js";
 import { shouldSuppressLocalExecApprovalPrompt } from "../../channels/plugins/exec-approval-local.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { applyMergePatch } from "../../config/merge-patch.js";
 import { parseSessionThreadInfo } from "../../config/sessions/thread-info.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { logVerbose } from "../../globals.js";
@@ -37,6 +38,7 @@ import {
 import { getGlobalHookRunner, getGlobalPluginRegistry } from "../../plugins/hook-runner-global.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
 import { normalizeTtsAutoMode, resolveConfiguredTtsMode } from "../../tts/tts-config.js";
+import { resolveStatusTtsSnapshot } from "../../tts/status-config.js";
 import { normalizeMessageChannel } from "../../utils/message-channel.js";
 import type { FinalizedMsgContext } from "../templating.js";
 import { normalizeVerboseLevel } from "../thinking.js";
@@ -53,7 +55,9 @@ import {
   resolveStorePath,
   triggerInternalHook,
 } from "./dispatch-from-config.runtime.js";
+import { isAbortRequestText } from "./abort-primitives.js";
 import { shouldSkipDuplicateInbound } from "./inbound-dedupe.js";
+import { stripStructuralPrefixes } from "./mentions.js";
 import type { ReplyDispatcher, ReplyDispatchKind } from "./reply-dispatcher.js";
 import { resolveReplyRoutingDecision } from "./routing-policy.js";
 import { resolveRunTypingPolicy } from "./typing-policy.js";
@@ -88,6 +92,14 @@ function loadTtsRuntime() {
 async function maybeApplyTtsToReplyPayload(
   params: Parameters<Awaited<ReturnType<typeof loadTtsRuntime>>["maybeApplyTtsToPayload"]>[0],
 ) {
+  if (
+    !resolveStatusTtsSnapshot({
+      cfg: params.cfg,
+      sessionAuto: params.ttsAuto,
+    })
+  ) {
+    return params.payload;
+  }
   const { maybeApplyTtsToPayload } = await loadTtsRuntime();
   return maybeApplyTtsToPayload(params);
 }
@@ -124,6 +136,29 @@ const isInboundAudioContext = (ctx: FinalizedMsgContext): boolean => {
     return true;
   }
   return AUDIO_HEADER_RE.test(trimmed);
+};
+
+const resolveAbortPrecheckText = (ctx: FinalizedMsgContext): string => {
+  const raw =
+    [
+      typeof ctx.CommandBody === "string" ? ctx.CommandBody : undefined,
+      typeof ctx.RawBody === "string" ? ctx.RawBody : undefined,
+      typeof ctx.Body === "string" ? ctx.Body : undefined,
+    ].find((value) => typeof value === "string" && value.trim().length > 0) ?? "";
+  return stripStructuralPrefixes(raw);
+};
+
+const shouldSkipAbortRuntimePrecheck = (params: {
+  ctx: FinalizedMsgContext;
+  hasExplicitAbortResolvers: boolean;
+}): boolean => {
+  if (params.hasExplicitAbortResolvers) {
+    return false;
+  }
+  if (params.ctx.ChatType?.trim().toLowerCase() === "group") {
+    return false;
+  }
+  return !isAbortRequestText(resolveAbortPrecheckText(params.ctx));
 };
 
 const resolveSessionStoreLookup = (
@@ -196,6 +231,18 @@ export async function dispatchReplyFromConfig(params: {
   configOverride?: OpenClawConfig;
 }): Promise<DispatchFromConfigResult> {
   const { ctx, cfg, dispatcher } = params;
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const dispatchStartedAt = ingressTimingEnabled ? Date.now() : 0;
+  const traceDispatch = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[dispatch-from-config] ${step} channel=${String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase()} session=${ctx.SessionKey ?? "(no-session)"} elapsedMs=${Date.now() - dispatchStartedAt}`,
+    );
+  };
+
+  traceDispatch("start");
   const diagnosticsEnabled = isDiagnosticsEnabled(cfg);
   const channel = String(ctx.Surface ?? ctx.Provider ?? "unknown").toLowerCase();
   const chatId = ctx.To ?? ctx.From;
@@ -255,6 +302,7 @@ export async function dispatchReplyFromConfig(params: {
   }
 
   const sessionStoreEntry = resolveSessionStoreLookup(ctx, cfg);
+  traceDispatch("after-sessionStoreLookup");
   const acpDispatchSessionKey = sessionStoreEntry.sessionKey ?? sessionKey;
   const sessionAgentId = resolveSessionAgentId({ sessionKey: acpDispatchSessionKey, config: cfg });
   const sessionAgentCfg = resolveAgentConfig(cfg, sessionAgentId);
@@ -294,6 +342,16 @@ export async function dispatchReplyFromConfig(params: {
       typeof ctx.CommandAuthorized === "boolean" ? ctx.CommandAuthorized : undefined,
     wasMentioned: typeof ctx.WasMentioned === "boolean" ? ctx.WasMentioned : undefined,
   });
+  let routeReplyRuntime: Awaited<ReturnType<typeof loadRouteReplyRuntime>> | null = null;
+  const ensureRouteReplyRuntime = async () => {
+    if (routeReplyRuntime) {
+      return routeReplyRuntime;
+    }
+    traceDispatch("before-loadRouteReplyRuntime");
+    routeReplyRuntime = await loadRouteReplyRuntime();
+    traceDispatch("after-loadRouteReplyRuntime");
+    return routeReplyRuntime;
+  };
 
   // Check if we should route replies to originating channel instead of dispatcher.
   // Only route when the originating channel is DIFFERENT from the current surface.
@@ -303,7 +361,17 @@ export async function dispatchReplyFromConfig(params: {
   //
   // Debug: `pnpm test src/auto-reply/reply/dispatch-from-config.test.ts`
   const suppressAcpChildUserDelivery = isParentOwnedBackgroundAcpSession(sessionStoreEntry.entry);
-  const routeReplyRuntime = await loadRouteReplyRuntime();
+  const normalizedCurrentSurface =
+    normalizeMessageChannel(ctx.Provider) ?? normalizeMessageChannel(ctx.Surface);
+  const normalizedOriginatingChannel = normalizeMessageChannel(ctx.OriginatingChannel);
+  const shouldConsiderOriginatingRoute =
+    !suppressAcpChildUserDelivery &&
+    Boolean(ctx.OriginatingTo) &&
+    Boolean(normalizedOriginatingChannel) &&
+    normalizedOriginatingChannel !== normalizedCurrentSurface;
+  const routeReplyRuntimeIsRoutableChannel = shouldConsiderOriginatingRoute
+    ? (await ensureRouteReplyRuntime()).isRoutableChannel
+    : () => false;
   const { originatingChannel, currentSurface, shouldRouteToOriginating, shouldSuppressTyping } =
     resolveReplyRoutingDecision({
       provider: ctx.Provider,
@@ -312,7 +380,7 @@ export async function dispatchReplyFromConfig(params: {
       originatingChannel: ctx.OriginatingChannel,
       originatingTo: ctx.OriginatingTo,
       suppressDirectUserDelivery: suppressAcpChildUserDelivery,
-      isRoutableChannel: routeReplyRuntime.isRoutableChannel,
+      isRoutableChannel: routeReplyRuntimeIsRoutableChannel,
     });
   const originatingTo = ctx.OriginatingTo;
   const ttsChannel = shouldRouteToOriginating ? originatingChannel : currentSurface;
@@ -336,6 +404,7 @@ export async function dispatchReplyFromConfig(params: {
     if (abortSignal?.aborted) {
       return;
     }
+    const routeReplyRuntime = await ensureRouteReplyRuntime();
     const result = await routeReplyRuntime.routeReply({
       payload,
       channel: originatingChannel,
@@ -359,6 +428,7 @@ export async function dispatchReplyFromConfig(params: {
     mode: "additive" | "terminal",
   ): Promise<boolean> => {
     if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+      const routeReplyRuntime = await ensureRouteReplyRuntime();
       const result = await routeReplyRuntime.routeReply({
         payload,
         channel: originatingChannel,
@@ -500,49 +570,65 @@ export async function dispatchReplyFromConfig(params: {
   markProcessing();
 
   try {
-    const abortRuntime = params.fastAbortResolver ? null : await loadAbortRuntime();
-    const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
-    const formatAbortReplyTextResolver =
-      params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
-    if (!fastAbortResolver || !formatAbortReplyTextResolver) {
-      throw new Error("abort runtime unavailable");
-    }
-    const fastAbort = await fastAbortResolver({ ctx, cfg });
-    if (fastAbort.handled) {
-      const payload = {
-        text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
-      } satisfies ReplyPayload;
-      let queuedFinal = false;
-      let routedFinalCount = 0;
-      if (shouldRouteToOriginating && originatingChannel && originatingTo) {
-        const result = await routeReplyRuntime.routeReply({
-          payload,
-          channel: originatingChannel,
-          to: originatingTo,
-          sessionKey: ctx.SessionKey,
-          accountId: ctx.AccountId,
-          threadId: routeThreadId,
-          cfg,
-          isGroup,
-          groupId,
-        });
-        queuedFinal = result.ok;
-        if (result.ok) {
-          routedFinalCount += 1;
-        }
-        if (!result.ok) {
-          logVerbose(
-            `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
-          );
-        }
-      } else {
-        queuedFinal = dispatcher.sendFinalReply(payload);
+    const skipAbortRuntimePrecheck = shouldSkipAbortRuntimePrecheck({
+      ctx,
+      hasExplicitAbortResolvers: Boolean(
+        params.fastAbortResolver || params.formatAbortReplyTextResolver,
+      ),
+    });
+    if (!skipAbortRuntimePrecheck) {
+      const shouldLoadAbortRuntime =
+        !params.fastAbortResolver || !params.formatAbortReplyTextResolver;
+      const abortRuntime = shouldLoadAbortRuntime
+        ? (traceDispatch("before-loadAbortRuntime"), await loadAbortRuntime())
+        : null;
+      if (shouldLoadAbortRuntime) {
+        traceDispatch("after-loadAbortRuntime");
       }
-      const counts = dispatcher.getQueuedCounts();
-      counts.final += routedFinalCount;
-      recordProcessed("completed", { reason: "fast_abort" });
-      markIdle("message_completed");
-      return { queuedFinal, counts };
+      const fastAbortResolver = params.fastAbortResolver ?? abortRuntime?.tryFastAbortFromMessage;
+      const formatAbortReplyTextResolver =
+        params.formatAbortReplyTextResolver ?? abortRuntime?.formatAbortReplyText;
+      if (!fastAbortResolver || !formatAbortReplyTextResolver) {
+        throw new Error("abort runtime unavailable");
+      }
+      const fastAbort = await fastAbortResolver({ ctx, cfg });
+      if (fastAbort.handled) {
+        const payload = {
+          text: formatAbortReplyTextResolver(fastAbort.stoppedSubagents),
+        } satisfies ReplyPayload;
+        let queuedFinal = false;
+        let routedFinalCount = 0;
+        if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+          const routeReplyRuntime = await ensureRouteReplyRuntime();
+          const result = await routeReplyRuntime.routeReply({
+            payload,
+            channel: originatingChannel,
+            to: originatingTo,
+            sessionKey: ctx.SessionKey,
+            accountId: ctx.AccountId,
+            threadId: routeThreadId,
+            cfg,
+            isGroup,
+            groupId,
+          });
+          queuedFinal = result.ok;
+          if (result.ok) {
+            routedFinalCount += 1;
+          }
+          if (!result.ok) {
+            logVerbose(
+              `dispatch-from-config: route-reply (abort) failed: ${result.error ?? "unknown error"}`,
+            );
+          }
+        } else {
+          queuedFinal = dispatcher.sendFinalReply(payload);
+        }
+        const counts = dispatcher.getQueuedCounts();
+        counts.final += routedFinalCount;
+        recordProcessed("completed", { reason: "fast_abort" });
+        markIdle("message_completed");
+        return { queuedFinal, counts };
+      }
     }
 
     const sendPolicy = resolveSendPolicy({
@@ -563,6 +649,7 @@ export async function dispatchReplyFromConfig(params: {
     const sendFinalPayload = async (
       payload: ReplyPayload,
     ): Promise<{ queuedFinal: boolean; routedFinalCount: number }> => {
+      traceDispatch("before-final-tts");
       const ttsPayload = await maybeApplyTtsToReplyPayload({
         payload,
         cfg,
@@ -571,7 +658,10 @@ export async function dispatchReplyFromConfig(params: {
         inboundAudio,
         ttsAuto: sessionTtsAuto,
       });
+      traceDispatch("after-final-tts");
       if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+        traceDispatch("before-final-routeReply");
+        const routeReplyRuntime = await ensureRouteReplyRuntime();
         const result = await routeReplyRuntime.routeReply({
           payload: ttsPayload,
           channel: originatingChannel,
@@ -588,19 +678,24 @@ export async function dispatchReplyFromConfig(params: {
             `dispatch-from-config: route-reply (final) failed: ${result.error ?? "unknown error"}`,
           );
         }
+        traceDispatch("after-final-routeReply");
         return {
           queuedFinal: result.ok,
           routedFinalCount: result.ok ? 1 : 0,
         };
       }
+      traceDispatch("before-final-dispatcher");
+      const queuedFinal = dispatcher.sendFinalReply(ttsPayload);
+      traceDispatch("after-final-dispatcher");
       return {
-        queuedFinal: dispatcher.sendFinalReply(ttsPayload),
+        queuedFinal,
         routedFinalCount: 0,
       };
     };
 
     // Run before_dispatch hook — let plugins inspect or handle before model dispatch.
     if (hookRunner?.hasHooks("before_dispatch")) {
+      traceDispatch("before-before_dispatch-hook");
       const beforeDispatchResult = await hookRunner.runBeforeDispatch(
         {
           content: hookContext.content,
@@ -619,6 +714,7 @@ export async function dispatchReplyFromConfig(params: {
           senderId: hookContext.senderId,
         },
       );
+      traceDispatch("after-before_dispatch-hook");
       if (beforeDispatchResult?.handled) {
         const text = beforeDispatchResult.text;
         let queuedFinal = false;
@@ -637,6 +733,7 @@ export async function dispatchReplyFromConfig(params: {
     }
 
     if (hookRunner?.hasHooks("reply_dispatch")) {
+      traceDispatch("before-reply_dispatch-hook");
       const replyDispatchResult = await hookRunner.runReplyDispatch(
         {
           ctx,
@@ -661,6 +758,7 @@ export async function dispatchReplyFromConfig(params: {
           markIdle,
         },
       );
+      traceDispatch("after-reply_dispatch-hook");
       if (replyDispatchResult?.handled) {
         return {
           queuedFinal: replyDispatchResult.queuedFinal,
@@ -809,10 +907,15 @@ export async function dispatchReplyFromConfig(params: {
 
     const replyResolver =
       params.replyResolver ?? (await loadGetReplyFromConfigRuntime()).getReplyFromConfig;
+    traceDispatch("before-replyResolver");
+    const resolvedConfigForReply = params.configOverride
+      ? (applyMergePatch(cfg, params.configOverride) as OpenClawConfig)
+      : cfg;
     const replyResult = await replyResolver(
       ctx,
       {
         ...params.replyOptions,
+        configOverrideMode: "replace",
         typingPolicy: typing.typingPolicy,
         suppressTyping: typing.suppressTyping,
         onToolResult: (payload: ReplyPayload) => {
@@ -910,8 +1013,9 @@ export async function dispatchReplyFromConfig(params: {
           return run();
         },
       },
-      params.configOverride,
+      resolvedConfigForReply,
     );
+    traceDispatch("after-replyResolver");
 
     if (ctx.AcpDispatchTailAfterReset === true) {
       // Command handling prepared a trailing prompt after ACP in-place reset.
@@ -961,7 +1065,9 @@ export async function dispatchReplyFromConfig(params: {
       if (reply.isReasoning === true) {
         continue;
       }
+      traceDispatch("before-sendFinalPayload");
       const finalReply = await sendFinalPayload(reply);
+      traceDispatch("after-sendFinalPayload");
       queuedFinal = finalReply.queuedFinal || queuedFinal;
       routedFinalCount += finalReply.routedFinalCount;
     }
@@ -993,6 +1099,7 @@ export async function dispatchReplyFromConfig(params: {
             audioAsVoice: ttsSyntheticReply.audioAsVoice,
           };
           if (shouldRouteToOriginating && originatingChannel && originatingTo) {
+            const routeReplyRuntime = await ensureRouteReplyRuntime();
             const result = await routeReplyRuntime.routeReply({
               payload: ttsOnlyPayload,
               channel: originatingChannel,
@@ -1027,11 +1134,13 @@ export async function dispatchReplyFromConfig(params: {
 
     const counts = dispatcher.getQueuedCounts();
     counts.final += routedFinalCount;
+    traceDispatch("before-return");
     recordProcessed(
       "completed",
       pluginFallbackReason ? { reason: pluginFallbackReason } : undefined,
     );
     markIdle("message_completed");
+    traceDispatch("after-return-side-effects");
     return { queuedFinal, counts };
   } catch (err) {
     recordProcessed("error", { error: String(err) });

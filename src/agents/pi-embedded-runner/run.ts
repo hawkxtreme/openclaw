@@ -104,6 +104,16 @@ type ApiKeyInfo = ResolvedProviderAuth;
 export async function runEmbeddedPiAgent(
   params: RunEmbeddedPiAgentParams,
 ): Promise<EmbeddedPiRunResult> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[run-embedded-pi] ${step} session=${params.sessionKey ?? params.sessionId ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
   const sessionLane = resolveSessionLane(params.sessionKey?.trim() || params.sessionId);
   const globalLane = resolveGlobalLane(params.lane);
   const enqueueGlobal =
@@ -137,18 +147,23 @@ export async function runEmbeddedPiAgent(
   };
 
   throwIfAborted();
+  traceIngress("before-enqueueSession");
 
   return enqueueSession(() => {
+    traceIngress("after-enqueueSession");
     throwIfAborted();
     return enqueueGlobal(async () => {
+      traceIngress("after-enqueueGlobal");
       throwIfAborted();
       const started = Date.now();
+      traceIngress("before-resolveRunWorkspaceDir");
       const workspaceResolution = resolveRunWorkspaceDir({
         workspaceDir: params.workspaceDir,
         sessionKey: params.sessionKey,
         agentId: params.agentId,
         config: params.config,
       });
+      traceIngress("after-resolveRunWorkspaceDir");
       const resolvedWorkspace = workspaceResolution.workspaceDir;
       const redactedSessionId = redactRunIdentifier(params.sessionId);
       const redactedSessionKey = redactRunIdentifier(params.sessionKey);
@@ -158,11 +173,13 @@ export async function runEmbeddedPiAgent(
           `[workspace-fallback] caller=runEmbeddedPiAgent reason=${workspaceResolution.fallbackReason} run=${params.runId} session=${redactedSessionId} sessionKey=${redactedSessionKey} agent=${workspaceResolution.agentId} workspace=${redactedWorkspace}`,
         );
       }
+      traceIngress("before-ensureRuntimePluginsLoaded");
       ensureRuntimePluginsLoaded({
         config: params.config,
         workspaceDir: resolvedWorkspace,
         allowGatewaySubagentBinding: params.allowGatewaySubagentBinding,
       });
+      traceIngress("after-ensureRuntimePluginsLoaded");
 
       let provider = (params.provider ?? DEFAULT_PROVIDER).trim() || DEFAULT_PROVIDER;
       let modelId = (params.model ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
@@ -172,7 +189,9 @@ export async function runEmbeddedPiAgent(
         agentId: params.agentId,
         sessionKey: params.sessionKey,
       });
+      traceIngress("before-ensureOpenClawModelsJson");
       await ensureOpenClawModelsJson(params.config, agentDir);
+      traceIngress("after-ensureOpenClawModelsJson");
       const hookRunner = getGlobalHookRunner();
       const hookCtx = {
         runId: params.runId,
@@ -194,16 +213,19 @@ export async function runEmbeddedPiAgent(
         hookRunner,
         hookContext: hookCtx,
       });
+      traceIngress("after-resolveHookModelSelection");
       provider = hookSelection.provider;
       modelId = hookSelection.modelId;
       const legacyBeforeAgentStartResult = hookSelection.legacyBeforeAgentStartResult;
 
+      traceIngress("before-resolveModelAsync");
       const { model, error, authStorage, modelRegistry } = await resolveModelAsync(
         provider,
         modelId,
         agentDir,
         params.config,
       );
+      traceIngress("after-resolveModelAsync");
       if (!model) {
         throw new FailoverError(error ?? `Unknown model: ${provider}/${modelId}`, {
           reason: "model_not_found",
@@ -314,7 +336,9 @@ export async function runEmbeddedPiAgent(
         log,
       });
 
+      traceIngress("before-initializeAuthProfile");
       await initializeAuthProfile();
+      traceIngress("after-initializeAuthProfile");
 
       const MAX_TIMEOUT_COMPACTION_ATTEMPTS = 2;
       const MAX_OVERFLOW_COMPACTION_ATTEMPTS = 3;

@@ -454,59 +454,14 @@ function validateGatewayTailscaleBind(config: OpenClawConfig): ConfigValidationI
 export function validateConfigObjectRaw(
   raw: unknown,
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
-  const legacyIssues = findLegacyConfigIssues(raw, raw, listPluginDoctorLegacyConfigRules());
-  if (legacyIssues.length > 0) {
-    return {
-      ok: false,
-      issues: legacyIssues.map((iss) => ({
-        path: iss.path,
-        message: iss.message,
-      })),
-    };
-  }
-  const validated = OpenClawSchema.safeParse(raw);
-  if (!validated.success) {
-    const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
-    return {
-      ok: false,
-      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
-    };
-  }
-  if (policyIssues.length > 0) {
-    return { ok: false, issues: policyIssues };
-  }
-  const validatedConfig = validated.data as OpenClawConfig;
-  const duplicates = findDuplicateAgentDirs(validatedConfig);
-  if (duplicates.length > 0) {
-    return {
-      ok: false,
-      issues: [
-        {
-          path: "agents.list",
-          message: formatDuplicateAgentDirError(duplicates),
-        },
-      ],
-    };
-  }
-  const avatarIssues = validateIdentityAvatar(validatedConfig);
-  if (avatarIssues.length > 0) {
-    return { ok: false, issues: avatarIssues };
-  }
-  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
-  if (gatewayTailscaleBindIssues.length > 0) {
-    return { ok: false, issues: gatewayTailscaleBindIssues };
-  }
-  return {
-    ok: true,
-    config: validatedConfig,
-  };
+  return validateConfigObjectRawInternal(raw);
 }
 
-export function validateConfigObject(
+function validateConfigObjectInternal(
   raw: unknown,
+  legacyOptions: LegacyValidationOptions = {},
 ): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
-  const result = validateConfigObjectRaw(raw);
+  const result = validateConfigObjectRawInternal(raw, legacyOptions);
   if (!result.ok) {
     return result;
   }
@@ -514,6 +469,12 @@ export function validateConfigObject(
     ok: true,
     config: materializeRuntimeConfig(result.config, "snapshot"),
   };
+}
+
+export function validateConfigObject(
+  raw: unknown,
+): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+  return validateConfigObjectInternal(raw);
 }
 
 type ValidateConfigWithPluginsResult =
@@ -528,25 +489,126 @@ type ValidateConfigWithPluginsResult =
       warnings: ConfigValidationIssue[];
     };
 
+function createConfigValidationTracer(scope: string): (step: string) => void {
+  if (process.env.OPENCLAW_DEBUG_CONFIG_VALIDATE !== "1") {
+    return () => {};
+  }
+  const startedAt = Date.now();
+  return (step: string) => {
+    console.warn(`[config-validate] ${scope}:${step} elapsedMs=${Date.now() - startedAt}`);
+  };
+}
+
+type LegacyValidationOptions = {
+  includePluginDoctorRules?: boolean;
+  includeChannelRules?: boolean;
+};
+
+function validateConfigObjectRawInternal(
+  raw: unknown,
+  legacyOptions: LegacyValidationOptions = {},
+): { ok: true; config: OpenClawConfig } | { ok: false; issues: ConfigValidationIssue[] } {
+  const includePluginDoctorRules = legacyOptions.includePluginDoctorRules !== false;
+  const includeChannelRules = legacyOptions.includeChannelRules !== false;
+  const trace = createConfigValidationTracer("raw");
+  trace("start");
+  const policyIssues = collectUnsupportedSecretRefPolicyIssues(raw);
+  trace("after-policy");
+  trace("before-doctor-rules");
+  const doctorRules = includePluginDoctorRules ? listPluginDoctorLegacyConfigRules() : [];
+  trace("after-doctor-rules");
+  trace("before-legacy-scan");
+  const legacyIssues = findLegacyConfigIssues(raw, raw, doctorRules, {
+    includeChannelRules,
+  });
+  trace("after-legacy");
+  if (legacyIssues.length > 0) {
+    return {
+      ok: false,
+      issues: legacyIssues.map((iss) => ({
+        path: iss.path,
+        message: iss.message,
+      })),
+    };
+  }
+  trace("before-safe-parse");
+  const validated = OpenClawSchema.safeParse(raw);
+  trace("after-safe-parse");
+  if (!validated.success) {
+    const schemaIssues = validated.error.issues.map((issue) => mapZodIssueToConfigIssue(issue));
+    return {
+      ok: false,
+      issues: mergeUnsupportedMutableSecretRefIssues(policyIssues, schemaIssues),
+    };
+  }
+  if (policyIssues.length > 0) {
+    return { ok: false, issues: policyIssues };
+  }
+  const validatedConfig = validated.data as OpenClawConfig;
+  const duplicates = findDuplicateAgentDirs(validatedConfig);
+  trace("after-duplicates");
+  if (duplicates.length > 0) {
+    return {
+      ok: false,
+      issues: [
+        {
+          path: "agents.list",
+          message: formatDuplicateAgentDirError(duplicates),
+        },
+      ],
+    };
+  }
+  const avatarIssues = validateIdentityAvatar(validatedConfig);
+  trace("after-avatar");
+  if (avatarIssues.length > 0) {
+    return { ok: false, issues: avatarIssues };
+  }
+  const gatewayTailscaleBindIssues = validateGatewayTailscaleBind(validatedConfig);
+  trace("after-gateway");
+  if (gatewayTailscaleBindIssues.length > 0) {
+    return { ok: false, issues: gatewayTailscaleBindIssues };
+  }
+  trace("return-ok");
+  return {
+    ok: true,
+    config: validatedConfig,
+  };
+}
+
 export function validateConfigObjectWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; legacy?: LegacyValidationOptions },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: true, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: true,
+    env: params?.env,
+    legacy: params?.legacy,
+  });
 }
 
 export function validateConfigObjectRawWithPlugins(
   raw: unknown,
-  params?: { env?: NodeJS.ProcessEnv },
+  params?: { env?: NodeJS.ProcessEnv; legacy?: LegacyValidationOptions },
 ): ValidateConfigWithPluginsResult {
-  return validateConfigObjectWithPluginsBase(raw, { applyDefaults: false, env: params?.env });
+  return validateConfigObjectWithPluginsBase(raw, {
+    applyDefaults: false,
+    env: params?.env,
+    legacy: params?.legacy,
+  });
 }
 
 function validateConfigObjectWithPluginsBase(
   raw: unknown,
-  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv },
+  opts: { applyDefaults: boolean; env?: NodeJS.ProcessEnv; legacy?: LegacyValidationOptions },
 ): ValidateConfigWithPluginsResult {
-  const base = opts.applyDefaults ? validateConfigObject(raw) : validateConfigObjectRaw(raw);
+  const trace = createConfigValidationTracer(
+    opts.applyDefaults ? "with-plugins-defaults" : "with-plugins-raw",
+  );
+  trace("start");
+  const base = opts.applyDefaults
+    ? validateConfigObjectInternal(raw, opts.legacy)
+    : validateConfigObjectRawInternal(raw, opts.legacy);
+  trace("after-base");
   if (!base.ok) {
     return { ok: false, issues: base.issues, warnings: [] };
   }
@@ -737,6 +799,7 @@ function validateConfigObjectWithPluginsBase(
   const allowedChannels = new Set<string>(["defaults", "modelByChannel", ...CHANNEL_IDS]);
 
   if (config.channels && isRecord(config.channels)) {
+    trace("before-channel-loop");
     for (const key of Object.keys(config.channels)) {
       const trimmed = key.trim();
       if (!trimmed) {
@@ -782,6 +845,7 @@ function validateConfigObjectWithPluginsBase(
       }
       replaceChannelConfig(trimmed, result.value);
     }
+    trace("after-channel-loop");
   }
 
   const heartbeatChannelIds = new Set<string>();
@@ -833,16 +897,22 @@ function validateConfigObjectWithPluginsBase(
   }
 
   if (!hasExplicitPluginsConfig) {
+    trace("before-return-no-explicit-plugins");
     if (issues.length > 0) {
       return { ok: false, issues, warnings };
     }
     return { ok: true, config: mutatedConfig, warnings };
   }
 
+  trace("before-registry");
   const { registry } = ensureRegistry();
+  trace("after-registry");
   const knownIds = ensureKnownIds();
+  trace("after-known-ids");
   const normalizedPlugins = ensureNormalizedPlugins();
+  trace("after-normalized-plugins");
   const effectiveConfig = ensureCompatConfig();
+  trace("after-compat-config");
   const pushMissingPluginIssue = (
     path: string,
     pluginId: string,

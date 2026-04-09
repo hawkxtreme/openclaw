@@ -16,6 +16,17 @@ import { enforceSourceManagedProviderSecrets } from "./models-config.providers.s
 
 type ModelsConfig = NonNullable<OpenClawConfig["models"]>;
 
+function createNormalizeProvidersTrace() {
+  const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const startedAt = enabled ? Date.now() : 0;
+  return (step: string) => {
+    if (!enabled) {
+      return;
+    }
+    console.warn(`[normalize-providers] ${step} elapsedMs=${Date.now() - startedAt}`);
+  };
+}
+
 export function normalizeProviders(params: {
   providers: ModelsConfig["providers"];
   agentDir: string;
@@ -29,6 +40,7 @@ export function normalizeProviders(params: {
   if (!providers) {
     return providers;
   }
+  const trace = createNormalizeProvidersTrace();
   const env = params.env ?? process.env;
   let authStore: ReturnType<typeof ensureAuthProfileStore> | undefined;
   const resolveProfileApiKey = (providerKey: string) => {
@@ -46,6 +58,7 @@ export function normalizeProviders(params: {
 
   for (const [key, provider] of Object.entries(providers)) {
     const normalizedKey = key.trim();
+    trace(`provider-start key=${normalizedKey || "<empty>"}`);
     if (!normalizedKey) {
       mutated = true;
       continue;
@@ -97,6 +110,7 @@ export function normalizeProviders(params: {
         normalizedProvider.apiKey
       );
     const profileApiKey = needsProfileApiKey ? resolveProfileApiKey(normalizedKey) : undefined;
+    trace(`after-profile-api-key key=${normalizedKey} needed=${needsProfileApiKey ? "1" : "0"}`);
     const providerApiKeyResolver = needsProfileApiKey
       ? resolveProviderConfigApiKeyResolver(normalizedKey)
       : undefined;
@@ -117,6 +131,7 @@ export function normalizeProviders(params: {
       normalizedKey,
       normalizedProvider,
     );
+    trace(`after-provider-specific-normalize key=${normalizedKey}`);
     if (providerSpecificNormalized !== normalizedProvider) {
       mutated = true;
       normalizedProvider = providerSpecificNormalized;
@@ -135,9 +150,11 @@ export function normalizeProviders(params: {
       continue;
     }
     next[normalizedKey] = normalizedProvider;
+    trace(`provider-done key=${normalizedKey}`);
   }
 
   const normalizedProviders = mutated ? next : providers;
+  trace(`before-enforce-source-managed count=${Object.keys(normalizedProviders).length}`);
   return enforceSourceManagedProviderSecrets({
     providers: normalizedProviders,
     sourceProviders: params.sourceProviders,

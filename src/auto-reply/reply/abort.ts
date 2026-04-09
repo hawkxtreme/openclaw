@@ -1,12 +1,7 @@
 import { getAcpSessionManager } from "../../acp/control-plane/manager.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { abortEmbeddedPiRun } from "../../agents/pi-embedded.js";
-import {
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-  markSubagentRunTerminated,
-} from "../../agents/subagent-registry.js";
-import type { SubagentRunRecord } from "../../agents/subagent-registry.js";
+import { abortEmbeddedPiRun } from "../../agents/pi-embedded-runner/runs.js";
+import type { SubagentRunRecord } from "../../agents/subagent-registry.types.js";
 import {
   resolveInternalSessionKey,
   resolveMainSessionAlias,
@@ -53,35 +48,63 @@ export {
 const defaultAbortDeps = {
   getAcpSessionManager,
   abortEmbeddedPiRun,
-  getLatestSubagentRunByChildSessionKey,
-  listSubagentRunsForController,
-  markSubagentRunTerminated,
 };
 
 const abortDeps = {
   ...defaultAbortDeps,
 };
 
+type AbortSubagentRuntime = {
+  getLatestSubagentRunByChildSessionKey: (childSessionKey: string) => SubagentRunRecord | null;
+  listSubagentRunsForController: (controllerSessionKey: string) => SubagentRunRecord[];
+  markSubagentRunTerminated: (params: {
+    runId?: string;
+    childSessionKey?: string;
+    reason?: string;
+  }) => number;
+};
+
+let abortSubagentRuntimePromise: Promise<AbortSubagentRuntime> | null = null;
+let abortSubagentRuntimeOverride: AbortSubagentRuntime | null = null;
+
+function loadAbortSubagentRuntime(): Promise<AbortSubagentRuntime> {
+  if (abortSubagentRuntimeOverride) {
+    return Promise.resolve(abortSubagentRuntimeOverride);
+  }
+  abortSubagentRuntimePromise ??= import("../../agents/subagent-registry.js");
+  return abortSubagentRuntimePromise;
+}
+
 export const __testing = {
-  setDepsForTests(deps: Partial<typeof defaultAbortDeps> | undefined): void {
+  setDepsForTests(
+    deps:
+      | (Partial<typeof defaultAbortDeps> & Partial<AbortSubagentRuntime>)
+      | undefined,
+  ): void {
     abortDeps.getAcpSessionManager =
       deps?.getAcpSessionManager ?? defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = deps?.abortEmbeddedPiRun ?? defaultAbortDeps.abortEmbeddedPiRun;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      deps?.getLatestSubagentRunByChildSessionKey ??
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController =
-      deps?.listSubagentRunsForController ?? defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.markSubagentRunTerminated =
-      deps?.markSubagentRunTerminated ?? defaultAbortDeps.markSubagentRunTerminated;
+    if (
+      deps?.getLatestSubagentRunByChildSessionKey &&
+      deps?.listSubagentRunsForController &&
+      deps?.markSubagentRunTerminated
+    ) {
+      abortSubagentRuntimeOverride = {
+        getLatestSubagentRunByChildSessionKey: deps.getLatestSubagentRunByChildSessionKey,
+        listSubagentRunsForController: deps.listSubagentRunsForController,
+        markSubagentRunTerminated: deps.markSubagentRunTerminated,
+      };
+      abortSubagentRuntimePromise = null;
+      return;
+    }
+    abortSubagentRuntimeOverride = null;
+    abortSubagentRuntimePromise = null;
   },
   resetDepsForTests(): void {
     abortDeps.getAcpSessionManager = defaultAbortDeps.getAcpSessionManager;
     abortDeps.abortEmbeddedPiRun = defaultAbortDeps.abortEmbeddedPiRun;
-    abortDeps.getLatestSubagentRunByChildSessionKey =
-      defaultAbortDeps.getLatestSubagentRunByChildSessionKey;
-    abortDeps.listSubagentRunsForController = defaultAbortDeps.listSubagentRunsForController;
-    abortDeps.markSubagentRunTerminated = defaultAbortDeps.markSubagentRunTerminated;
+    abortSubagentRuntimeOverride = null;
+    abortSubagentRuntimePromise = null;
   },
 };
 
@@ -137,21 +160,22 @@ function normalizeRequesterSessionKey(
   return resolveInternalSessionKey({ key: cleaned, alias, mainKey });
 }
 
-export function stopSubagentsForRequester(params: {
+export async function stopSubagentsForRequester(params: {
   cfg: OpenClawConfig;
   requesterSessionKey?: string;
-}): { stopped: number } {
+}): Promise<{ stopped: number }> {
   const requesterKey = normalizeRequesterSessionKey(params.cfg, params.requesterSessionKey);
   if (!requesterKey) {
     return { stopped: 0 };
   }
+  const subagentRuntime = await loadAbortSubagentRuntime();
   const dedupedRunsByChildKey = new Map<string, SubagentRunRecord>();
-  for (const run of abortDeps.listSubagentRunsForController(requesterKey)) {
+  for (const run of subagentRuntime.listSubagentRunsForController(requesterKey)) {
     const childKey = run.childSessionKey?.trim();
     if (!childKey) {
       continue;
     }
-    const latest = abortDeps.getLatestSubagentRunByChildSessionKey(childKey);
+    const latest = subagentRuntime.getLatestSubagentRunByChildSessionKey(childKey);
     if (!latest) {
       const existing = dedupedRunsByChildKey.get(childKey);
       if (!existing || run.createdAt >= existing.createdAt) {
@@ -200,7 +224,7 @@ export function stopSubagentsForRequester(params: {
         (childKey ? replyRunRegistry.abort(childKey) : false) ||
         (sessionId ? abortDeps.abortEmbeddedPiRun(sessionId) : false);
       const markedTerminated =
-        abortDeps.markSubagentRunTerminated({
+        subagentRuntime.markSubagentRunTerminated({
           runId: run.runId,
           childSessionKey: childKey,
           reason: "killed",
@@ -212,7 +236,7 @@ export function stopSubagentsForRequester(params: {
     }
 
     // Cascade: also stop any sub-sub-agents spawned by this child.
-    const cascadeResult = stopSubagentsForRequester({
+    const cascadeResult = await stopSubagentsForRequester({
       cfg: params.cfg,
       requesterSessionKey: childKey,
     });
@@ -334,13 +358,13 @@ export async function tryFastAbortFromMessage(params: {
     } else if (abortKey) {
       setAbortMemory(abortKey, true);
     }
-    const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+    const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
     return { handled: true, aborted, stoppedSubagents: stopped };
   }
 
   if (abortKey) {
     setAbortMemory(abortKey, true);
   }
-  const { stopped } = stopSubagentsForRequester({ cfg, requesterSessionKey });
+  const { stopped } = await stopSubagentsForRequester({ cfg, requesterSessionKey });
   return { handled: true, aborted: false, stoppedSubagents: stopped };
 }

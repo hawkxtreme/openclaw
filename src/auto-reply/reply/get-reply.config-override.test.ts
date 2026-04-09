@@ -118,4 +118,35 @@ describe("getReplyFromConfig configOverride", () => {
       }),
     );
   });
+
+  it("uses configOverride directly when configOverrideMode=replace", async () => {
+    vi.mocked(loadConfigMock).mockImplementation(() => {
+      throw new Error("loadConfig should not be called");
+    });
+
+    await getReplyFromConfig(
+      buildCtx(),
+      { configOverrideMode: "replace" },
+      {
+        channels: {
+          telegram: {
+            botToken: "override-only-token",
+          },
+        },
+      } as OpenClawConfig,
+    );
+
+    expect(loadConfigMock).not.toHaveBeenCalled();
+    expect(mocks.resolveReplyDirectives).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: expect.objectContaining({
+          channels: expect.objectContaining({
+            telegram: expect.objectContaining({
+              botToken: "override-only-token",
+            }),
+          }),
+        }),
+      }),
+    );
+  });
 });

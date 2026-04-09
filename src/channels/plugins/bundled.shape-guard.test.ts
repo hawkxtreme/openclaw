@@ -94,6 +94,31 @@ describe("bundled channel entry shape guards", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("keeps bundled channel entrypoint specifiers off source-only src paths", () => {
+    const offenders: string[] = [];
+
+    for (const extensionDir of bundledPluginRoots) {
+      for (const relativePath of ["index.ts", "channel-entry.ts", "setup-entry.ts"]) {
+        const filePath = path.join(extensionDir, relativePath);
+        if (!fs.existsSync(filePath)) {
+          continue;
+        }
+        const source = fs.readFileSync(filePath, "utf8");
+        const usesEntryHelpers =
+          source.includes("defineBundledChannelEntry") ||
+          source.includes("defineBundledChannelSetupEntry");
+        if (!usesEntryHelpers) {
+          continue;
+        }
+        if (source.includes('specifier: "./src/')) {
+          offenders.push(path.relative(process.cwd(), filePath));
+        }
+      }
+    }
+
+    expect(offenders).toEqual([]);
+  });
+
   it("keeps channel implementations off the broad core SDK surface", () => {
     const offenders: string[] = [];
 

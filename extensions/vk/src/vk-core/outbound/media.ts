@@ -9,15 +9,19 @@ import {
 import { fileURLToPath } from "node:url";
 
 import {
+  editVkMessage,
   getVkDocumentUploadServer,
   getVkPhotoUploadServer,
+  resolveVkConversationMessageIdForMessage,
   saveVkDocument,
   saveVkMessagesPhoto,
   sendVkMessage,
   uploadVkMultipart,
+  VkApiError,
 } from "../core/api.js";
 import { formatVkOutboundMessage } from "../../text-format.js";
 import type { ResolvedVkAccount } from "../types/config.js";
+import { normalizeVkConversationMessageId } from "../../reply-to.js";
 import { normalizeVkPeerId, resolveVkRandomId } from "./send.js";
 
 const DEFAULT_MEDIA_TITLE = "attachment";
@@ -99,6 +103,7 @@ export type VkSendPayloadOptions = {
   mediaUrl?: string;
   mediaUrls?: string[];
   replyTo?: string | number;
+  editConversationMessageId?: string | number;
   randomId?: number;
   dedupeKey?: string;
   disableMentions?: boolean;
@@ -114,7 +119,11 @@ export type VkSendPayloadResult = {
   peerId: number;
   randomId: number;
   attachments: string[];
+  conversationMessageId?: string;
+  edited?: boolean;
 };
+
+const VK_EDIT_FALLBACK_CODES = new Set([909, 920]);
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -658,6 +667,43 @@ export async function sendVkPayload(
     dedupeKey: options.dedupeKey,
     randomId: options.randomId,
   });
+  const editConversationMessageId = normalizeVkConversationMessageId(
+    options.editConversationMessageId,
+  );
+  if (editConversationMessageId && attachments.length === 0) {
+    try {
+      await editVkMessage({
+        token: options.account.token,
+        peerId,
+        conversationMessageId: editConversationMessageId,
+        message: formatted?.text,
+        formatData: formatted?.formatData,
+        keyboard: options.keyboard,
+        disableMentions: options.disableMentions,
+        dontParseLinks: options.dontParseLinks,
+        apiVersion: options.account.config.apiVersion,
+        signal: options.signal,
+        fetchImpl,
+      });
+
+      return {
+        messageId: editConversationMessageId,
+        peerId,
+        randomId,
+        attachments,
+        conversationMessageId: editConversationMessageId,
+        edited: true,
+      };
+    } catch (error) {
+      if (
+        !(error instanceof VkApiError) ||
+        !VK_EDIT_FALLBACK_CODES.has(error.code)
+      ) {
+        throw error;
+      }
+    }
+  }
+
   const messageId = await sendVkMessage({
     token: options.account.token,
     peerId,
@@ -682,5 +728,16 @@ export async function sendVkPayload(
     peerId,
     randomId,
     attachments,
+    conversationMessageId:
+      options.keyboard || editConversationMessageId
+        ? await resolveVkConversationMessageIdForMessage({
+            token: options.account.token,
+            peerId,
+            messageId,
+            apiVersion: options.account.config.apiVersion,
+            signal: options.signal,
+            fetchImpl,
+          })
+        : undefined,
   };
 }

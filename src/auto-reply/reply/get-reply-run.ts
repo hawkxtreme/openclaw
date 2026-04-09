@@ -135,6 +135,16 @@ type RunPreparedReplyParams = {
 export async function runPreparedReply(
   params: RunPreparedReplyParams,
 ): Promise<ReplyPayload | ReplyPayload[] | undefined> {
+  const ingressTimingEnabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
+  const ingressTimingStartMs = ingressTimingEnabled ? Date.now() : 0;
+  const traceIngress = (step: string) => {
+    if (!ingressTimingEnabled) {
+      return;
+    }
+    console.warn(
+      `[run-prepared-reply] ${step} session=${params.sessionKey ?? params.sessionId ?? "(no-session)"} elapsedMs=${Date.now() - ingressTimingStartMs}`,
+    );
+  };
   const {
     ctx,
     sessionCtx,
@@ -425,6 +435,7 @@ export async function runPreparedReply(
     inlineMode: perMessageQueueMode,
     inlineOptions: perMessageQueueOptions,
   });
+  traceIngress("before-loadPiEmbeddedRuntime");
   const {
     abortEmbeddedPiRun,
     isEmbeddedPiRunActive,
@@ -433,6 +444,7 @@ export async function runPreparedReply(
     resolveEmbeddedSessionLane,
     waitForEmbeddedPiRunEnd,
   } = await loadPiEmbeddedRuntime();
+  traceIngress("after-loadPiEmbeddedRuntime");
   const sessionLaneKey = resolveEmbeddedSessionLane(sessionKey ?? sessionIdFinal);
   const laneSize = getQueueSize(sessionLaneKey);
   if (resolvedQueue.mode === "interrupt" && laneSize > 0) {
@@ -441,6 +453,7 @@ export async function runPreparedReply(
     const aborted = abortEmbeddedPiRun(activeSessionId ?? preparedSessionState.sessionId);
     logVerbose(`Interrupting ${sessionLaneKey} (cleared ${cleared}, aborted=${aborted})`);
   }
+  traceIngress("before-resolveSessionAuthProfileOverride");
   let authProfileId = await resolveSessionAuthProfileOverride({
     cfg,
     provider,
@@ -451,9 +464,13 @@ export async function runPreparedReply(
     storePath,
     isNewSession,
   });
+  traceIngress("after-resolveSessionAuthProfileOverride");
+  traceIngress("before-loadAgentRunnerRuntime");
   const { runReplyAgent } = await loadAgentRunnerRuntime();
+  traceIngress("after-loadAgentRunnerRuntime");
   const queueKey = sessionKey ?? sessionIdFinal;
   preparedSessionState = resolvePreparedSessionState();
+  traceIngress("after-resolvePreparedSessionState");
   const resolveActiveQueueSessionId = () =>
     resolveActiveEmbeddedRunSessionId(sessionKey) ?? preparedSessionState.sessionId;
   const resolveQueueBusyState = () => {
@@ -468,6 +485,7 @@ export async function runPreparedReply(
     };
   };
   let { activeSessionId, isActive, isStreaming } = resolveQueueBusyState();
+  traceIngress(`after-resolveQueueBusyState active=${isActive} streaming=${isStreaming}`);
   const shouldSteer = resolvedQueue.mode === "steer" || resolvedQueue.mode === "steer-backlog";
   const shouldFollowup =
     resolvedQueue.mode === "followup" ||
@@ -490,6 +508,7 @@ export async function runPreparedReply(
     if (activeSessionIdBeforeWait) {
       await waitForEmbeddedPiRunEnd(activeSessionIdBeforeWait);
     }
+    traceIngress("after-waitForEmbeddedPiRunEnd");
     preparedSessionState = resolvePreparedSessionState();
     authProfileId = await resolveSessionAuthProfileOverride({
       cfg,
@@ -501,9 +520,14 @@ export async function runPreparedReply(
       storePath,
       isNewSession,
     });
+    traceIngress("after-interrupt-path-resolveSessionAuthProfileOverride");
     preparedSessionState = resolvePreparedSessionState();
     ({ prefixedCommandBody, queuedBody } = await rebuildPromptBodies());
+    traceIngress("after-interrupt-path-rebuildPromptBodies");
     ({ activeSessionId, isActive, isStreaming } = resolveQueueBusyState());
+    traceIngress(
+      `after-interrupt-path-resolveQueueBusyState active=${isActive} streaming=${isStreaming}`,
+    );
     if (isActive) {
       typing.cleanup();
       return {
@@ -584,7 +608,9 @@ export async function runPreparedReply(
     },
   };
 
-  return runReplyAgent({
+  traceIngress("after-buildFollowupRun");
+  traceIngress("before-runReplyAgent");
+  const reply = await runReplyAgent({
     commandBody: prefixedCommandBody,
     followupRun,
     queueKey,
@@ -617,4 +643,6 @@ export async function runPreparedReply(
     typingMode,
     resetTriggered,
   });
+  traceIngress("after-runReplyAgent");
+  return reply;
 }

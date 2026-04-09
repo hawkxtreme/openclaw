@@ -8,6 +8,15 @@ import {
 } from "openclaw/plugin-sdk/webhook-ingress";
 import { getVkConfig, listVkAccountIds, resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
 import { handleVkInboundMessage } from "./inbound.js";
+import {
+  resolveLatestVkInteractiveMenuId,
+  retireVkInteractiveMenu,
+} from "./interactive-menu.js";
+import {
+  isVkInteractiveMessageCurrent,
+  rememberVkInteractiveMessageId,
+  resolveRememberedVkInteractiveMessageId,
+} from "./interactive-state.js";
 import { resolveVkCommandFromPayload } from "./keyboard.js";
 import type { VkPlugin } from "./types.js";
 import {
@@ -100,16 +109,66 @@ function buildSyntheticMessageFromInteractiveEvent(event: VkMessageEvent) {
     eventType: "message_new" as const,
     eventId: event.eventId,
     dedupeKey: event.dedupeKey,
-    messageId: event.conversationMessageId ?? event.callbackEventId,
+    // Inline callback clicks on the same VK message share conversation_message_id,
+    // so use the callback event id as the synthetic message id to avoid false
+    // inbound dedupe across separate button presses.
+    messageId: event.callbackEventId,
     conversationMessageId: event.conversationMessageId,
     peerId: event.peerId,
     senderId: event.senderId,
     text: payloadCommand,
     messagePayload: event.payload,
+    editConversationMessageId: event.conversationMessageId,
     createdAt: event.createdAt ?? Date.now(),
     isGroupChat: event.peerId >= VK_GROUP_CHAT_PEER_ID_MIN,
     rawUpdate: event.rawUpdate,
   };
+}
+
+function buildInteractiveEventAnswer(commandText: string): VkInteractiveEventAnswer {
+  return {
+    eventData: {
+      type: "show_snackbar",
+      text: `Running ${commandText}...`,
+    },
+  };
+}
+
+function buildStaleInteractiveEventAnswer(): VkInteractiveEventAnswer {
+  return {
+    eventData: {
+      type: "show_snackbar",
+      text: "This menu is outdated. Use /models again.",
+    },
+  };
+}
+
+async function ensureVkInteractiveMenuState(params: {
+  account: ResolvedVkAccount;
+  peerId: string;
+}): Promise<void> {
+  if (
+    resolveRememberedVkInteractiveMessageId({
+      accountId: params.account.accountId,
+      peerId: params.peerId,
+    })
+  ) {
+    return;
+  }
+
+  const latestConversationMessageId = await resolveLatestVkInteractiveMenuId({
+    account: params.account,
+    peerId: params.peerId,
+  });
+  if (!latestConversationMessageId) {
+    return;
+  }
+
+  rememberVkInteractiveMessageId({
+    accountId: params.account.accountId,
+    peerId: params.peerId,
+    conversationMessageId: latestConversationMessageId,
+  });
 }
 
 function patchLongPollStatus(
@@ -284,19 +343,56 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
         accessController,
         log: ctx.log,
         statusSink,
-        onInteractiveEvent: async (event) => {
-          const syntheticMessage = buildSyntheticMessageFromInteractiveEvent(event);
-          if (!syntheticMessage) {
-            return;
-          }
-          await handleVkInboundMessage({
-            cfg: ctx.cfg as OpenClawConfig,
-            account,
-            message: syntheticMessage,
-            accessController,
-            log: ctx.log,
-            statusSink,
-          });
+        onInteractiveEvent: (event) => {
+          return Promise.resolve(
+            (async () => {
+              await ensureVkInteractiveMenuState({
+                account,
+                peerId: String(event.peerId),
+              });
+
+              const syntheticMessage = buildSyntheticMessageFromInteractiveEvent(event);
+              if (!syntheticMessage) {
+                return undefined;
+              }
+              if (
+                !isVkInteractiveMessageCurrent({
+                  accountId: account.accountId,
+                  peerId: String(event.peerId),
+                  conversationMessageId: event.conversationMessageId,
+                })
+              ) {
+                void retireVkInteractiveMenu({
+                  account,
+                  peerId: event.peerId,
+                  conversationMessageId: event.conversationMessageId,
+                  log: ctx.log,
+                });
+                return buildStaleInteractiveEventAnswer();
+              }
+
+              void Promise.resolve(
+                handleVkInboundMessage({
+                  cfg: ctx.cfg as OpenClawConfig,
+                  account,
+                  message: syntheticMessage,
+                  accessController,
+                  log: ctx.log,
+                  statusSink,
+                }),
+              ).catch((error) => {
+                const rendered = String(error);
+                statusSink({
+                  lastError: rendered,
+                });
+                ctx.log?.error?.(
+                  `[${ctx.accountId}] VK interactive command failed: ${rendered}`,
+                );
+              });
+
+              return buildInteractiveEventAnswer(syntheticMessage.text);
+            })(),
+          );
         },
       });
       const unregister = registerPluginHttpRoute({

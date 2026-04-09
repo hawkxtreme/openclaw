@@ -57,6 +57,8 @@ export function buildTelegramCommandsListChannelData(params: {
 
 export function buildTelegramModelsProviderChannelData(params: {
   providers: ProviderInfo[];
+  currentPage?: number;
+  totalPages?: number;
 }): ReplyPayload["channelData"] | null {
   if (params.providers.length === 0) {
     return null;

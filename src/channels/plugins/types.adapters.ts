@@ -549,6 +549,8 @@ export type ChannelCommandAdapter = {
   }) => ReplyPayload["channelData"] | null;
   buildModelsProviderChannelData?: (params: {
     providers: Array<{ id: string; count: number }>;
+    currentPage?: number;
+    totalPages?: number;
   }) => ReplyPayload["channelData"] | null;
   buildModelsListChannelData?: (params: {
     provider: string;

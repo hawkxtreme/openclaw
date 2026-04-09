@@ -14,6 +14,12 @@ fi
 if [[ -n "${OPENAI_BASE_URL:-}" && "${OPENAI_BASE_URL:-}" != "undefined" && "${OPENAI_BASE_URL:-}" != "null" ]]; then
   DOCKER_ENV_ARGS+=(-e OPENAI_BASE_URL)
 fi
+if [[ -n "${OPENCLAW_OPENWEBUI_MODEL:-}" && "${OPENCLAW_OPENWEBUI_MODEL:-}" != "undefined" && "${OPENCLAW_OPENWEBUI_MODEL:-}" != "null" ]]; then
+  DOCKER_ENV_ARGS+=(-e OPENCLAW_OPENWEBUI_MODEL)
+fi
+if [[ -n "${OPENCLAW_PLUGIN_COMMAND_MODEL:-}" && "${OPENCLAW_PLUGIN_COMMAND_MODEL:-}" != "undefined" && "${OPENCLAW_PLUGIN_COMMAND_MODEL:-}" != "null" ]]; then
+  DOCKER_ENV_ARGS+=(-e OPENCLAW_PLUGIN_COMMAND_MODEL)
+fi
 
 echo "Running plugins Docker E2E..."
 docker run --rm "${DOCKER_ENV_ARGS[@]}" -i "$IMAGE_NAME" bash -s <<'EOF'
@@ -41,6 +47,7 @@ sanitize_env_string() {
 
 export OPENAI_API_KEY="$(sanitize_env_string "${OPENAI_API_KEY:-}")"
 export OPENAI_BASE_URL="$(sanitize_env_string "${OPENAI_BASE_URL:-}")"
+export OPENCLAW_PLUGIN_COMMAND_MODEL="${OPENCLAW_PLUGIN_COMMAND_MODEL:-${OPENCLAW_OPENWEBUI_MODEL:-openai/gpt-4.1-mini}}"
 if [[ -z "$OPENAI_API_KEY" ]]; then
   unset OPENAI_API_KEY || true
 fi
@@ -55,32 +62,42 @@ OPENCLAW_PLUGIN_HOME="$HOME/.openclaw/$BUNDLED_PLUGIN_ROOT_DIR"
 
 gateway_pid=""
 
-seed_openai_provider_config() {
+seed_live_provider_config() {
   local openai_api_key="$1"
   local openai_base_url="${2:-}"
-  node - <<'NODE' "$openai_api_key" "$openai_base_url"
-const fs = require("node:fs");
-const path = require("node:path");
+  local live_model="${3:-}"
+  node --input-type=module - <<'NODE' "$openai_api_key" "$openai_base_url" "$live_model"
+import fs from "node:fs";
+import path from "node:path";
+import { buildOpenAiCompatibleProviderConfig } from "/app/scripts/e2e/openai-compatible-provider.mjs";
 
 const openaiApiKey = process.argv[2];
 const openaiBaseUrl = process.argv[3];
+const liveModel = process.argv[4];
 const configPath = path.join(process.env.HOME, ".openclaw", "openclaw.json");
 const config = fs.existsSync(configPath)
   ? JSON.parse(fs.readFileSync(configPath, "utf8"))
   : {};
-const existingOpenAI = config.models?.providers?.openai ?? {};
+const resolved = buildOpenAiCompatibleProviderConfig({
+  apiKey: openaiApiKey,
+  baseUrl: openaiBaseUrl,
+  model: liveModel,
+});
+
 config.models = {
   ...(config.models || {}),
   providers: {
     ...(config.models?.providers || {}),
-    openai: {
-      ...existingOpenAI,
-      baseUrl:
-        typeof existingOpenAI.baseUrl === "string" && existingOpenAI.baseUrl.trim()
-          ? existingOpenAI.baseUrl
-          : openaiBaseUrl || "https://api.openai.com/v1",
-      apiKey: openaiApiKey,
-      models: Array.isArray(existingOpenAI.models) ? existingOpenAI.models : [],
+    ...resolved.providers,
+  },
+};
+config.agents = {
+  ...(config.agents || {}),
+  defaults: {
+    ...(config.agents?.defaults || {}),
+    model: {
+      ...(config.agents?.defaults?.model || {}),
+      primary: resolved.primaryModel,
     },
   },
 };
@@ -590,17 +607,6 @@ config.gateway = {
   auth: { mode: "token", token: "plugin-e2e-token" },
   controlUi: { enabled: false },
 };
-if (process.env.OPENAI_API_KEY) {
-  config.agents = {
-    ...(config.agents || {}),
-    defaults: {
-      ...(config.agents?.defaults || {}),
-      // Use the same stable OpenAI family as the installer E2E to avoid
-      // long or reasoning-heavy live turns in this bundle-command smoke.
-      model: { primary: "openai/gpt-4.1-mini" },
-    },
-  };
-}
 config.commands = {
   ...(config.commands || {}),
   text: true,
@@ -611,7 +617,10 @@ fs.writeFileSync(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf8");
 NODE
 
 if [ -n "${OPENAI_API_KEY:-}" ]; then
-  seed_openai_provider_config "$OPENAI_API_KEY" "${OPENAI_BASE_URL:-}"
+  seed_live_provider_config \
+    "$OPENAI_API_KEY" \
+    "${OPENAI_BASE_URL:-}" \
+    "${OPENCLAW_PLUGIN_COMMAND_MODEL:-}"
 fi
 
 gateway_log="/tmp/openclaw-plugin-command-e2e.log"
