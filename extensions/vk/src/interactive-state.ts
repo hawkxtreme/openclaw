@@ -28,6 +28,15 @@ export function clearVkInteractiveMessageState(): void {
   lastInteractiveConversationMessageIds.clear();
 }
 
+export function forgetVkInteractiveMessageId(params: {
+  accountId: string;
+  peerId: string;
+}): void {
+  lastInteractiveConversationMessageIds.delete(
+    buildInteractiveStateKey(params.accountId, params.peerId),
+  );
+}
+
 export function isVkInteractiveMessageCurrent(params: {
   accountId: string;
   peerId: string;

@@ -406,7 +406,7 @@ describe("vk gateway interactive callbacks", () => {
     expect(interactiveEventAnswerMock).toHaveBeenCalledWith({
       eventData: {
         type: "show_snackbar",
-        text: "This menu is outdated. Use /models again.",
+        text: "This menu is outdated. Open Menu again.",
       },
     });
 
@@ -491,7 +491,7 @@ describe("vk gateway interactive callbacks", () => {
     expect(interactiveEventAnswerMock).toHaveBeenCalledWith({
       eventData: {
         type: "show_snackbar",
-        text: "This menu is outdated. Use /models again.",
+        text: "This menu is outdated. Open Menu again.",
       },
     });
 

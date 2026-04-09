@@ -138,6 +138,72 @@ describe("vk outbound text", () => {
     expect(requestedUrl?.searchParams.get("reply_to")).toBeNull();
   });
 
+  it("can edit a VK message into a collapsed launcher menu", async () => {
+    const account = createAccount({
+      config: {
+        groupId: 77,
+        transport: "long-poll",
+        accessToken: "replace-me-send-token",
+      },
+    });
+    let requestedUrl: URL | undefined;
+
+    const result = await sendVkText({
+      account,
+      peerId: 42,
+      text: "Menu hidden. Tap Menu to reopen.",
+      keyboard: JSON.stringify({
+        one_time: false,
+        buttons: [
+          [
+            {
+              action: {
+                type: "text",
+                label: "Menu",
+                payload: JSON.stringify({ oc: "/commands" }),
+              },
+              color: "secondary",
+            },
+          ],
+        ],
+      }),
+      editConversationMessageId: "72",
+      fetchImpl: async (input) => {
+        requestedUrl = new URL(String(input));
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      },
+    });
+
+    expect(result).toMatchObject({
+      messageId: "72",
+      peerId: 42,
+      edited: true,
+    });
+    expect(requestedUrl?.pathname).toBe("/method/messages.edit");
+    expect(requestedUrl?.searchParams.get("message")).toBe(
+      "Menu hidden. Tap Menu to reopen.",
+    );
+    expect(JSON.parse(requestedUrl?.searchParams.get("keyboard") ?? "{}")).toEqual({
+      one_time: false,
+      buttons: [
+        [
+          {
+            action: {
+              type: "text",
+              label: "Menu",
+              payload: JSON.stringify({ oc: "/commands" }),
+            },
+            color: "secondary",
+          },
+        ],
+      ],
+    });
+  });
+
   it("falls back to sending a new message when VK cannot edit the old menu", async () => {
     const account = createAccount();
     const requestedUrls: URL[] = [];

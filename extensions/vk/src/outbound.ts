@@ -13,6 +13,7 @@ import {
   type ResolvedVkAccount,
 } from "./accounts.js";
 import {
+  forgetVkInteractiveMessageId,
   rememberVkInteractiveMessageId,
   resolveRememberedVkInteractiveMessageId,
 } from "./interactive-state.js";
@@ -29,6 +30,39 @@ import { sendVkPayload } from "./vk-core/outbound/media.js";
 import { normalizeVkPeerId, sendVkText } from "./vk-core/outbound/send.js";
 
 const VK_GROUP_CHAT_PEER_ID_MIN = 2_000_000_000;
+
+function resolveVkChannelData(
+  payload: ReplyPayload,
+): Record<string, unknown> | undefined {
+  const channelData = payload.channelData;
+  if (!channelData || typeof channelData !== "object" || Array.isArray(channelData)) {
+    return undefined;
+  }
+  const vk = (channelData as Record<string, unknown>).vk;
+  return vk && typeof vk === "object" && !Array.isArray(vk)
+    ? (vk as Record<string, unknown>)
+    : undefined;
+}
+
+function resolveVkMenuBehavior(
+  payload: ReplyPayload,
+): "collapse" | undefined {
+  const menuBehavior = resolveVkChannelData(payload)?.menuBehavior;
+  return menuBehavior === "collapse" ? "collapse" : undefined;
+}
+
+function buildVkCollapsedMenuKeyboard(
+  transport: ResolvedVkAccount["config"]["transport"],
+): string | undefined {
+  return buildVkKeyboard(
+    {
+      inline: transport === "callback-api",
+      oneTime: false,
+      buttons: [[{ text: "Menu", callback_data: "/commands" }]],
+    },
+    transport,
+  );
+}
 
 export function normalizeVkTarget(raw: string): string | undefined {
   const trimmed = raw
@@ -107,15 +141,21 @@ export async function sendVkResolvedOutboundPayload(params: {
     ...params.payload,
     text: resolvedText,
   });
-  const keyboard = buildVkKeyboard(
+  const requestedKeyboard = buildVkKeyboard(
     resolveVkKeyboardSpecFromPayload(params.payload),
     account.config.transport,
   );
+  const menuBehavior = resolveVkMenuBehavior(params.payload);
   const requestedEditConversationMessageId = normalizeVkConversationMessageId(
     params.editConversationMessageId ?? null,
   );
   let rememberedInteractiveMessageId: string | undefined;
-  if (keyboard && !parts.mediaUrls.length && !requestedEditConversationMessageId) {
+  if (
+    account.config.transport === "callback-api" &&
+    requestedKeyboard &&
+    !parts.mediaUrls.length &&
+    !requestedEditConversationMessageId
+  ) {
     rememberedInteractiveMessageId = resolveRememberedVkInteractiveMessageId({
       accountId: account.accountId,
       peerId: params.to,
@@ -137,6 +177,14 @@ export async function sendVkResolvedOutboundPayload(params: {
   const editConversationMessageId =
     requestedEditConversationMessageId ??
     rememberedInteractiveMessageId;
+  const shouldClearRememberedMenu =
+    Boolean(editConversationMessageId) && !requestedKeyboard && !parts.mediaUrls.length;
+  const shouldAttachCollapsedLauncher =
+    menuBehavior === "collapse" && !requestedKeyboard && !parts.mediaUrls.length;
+  const keyboard =
+    shouldClearRememberedMenu || shouldAttachCollapsedLauncher
+      ? buildVkCollapsedMenuKeyboard(account.config.transport)
+      : requestedKeyboard;
 
   const result = await sendVkOutboundPayload({
     account,
@@ -152,6 +200,12 @@ export async function sendVkResolvedOutboundPayload(params: {
   const rememberedConversationMessageId = normalizeVkConversationMessageId(
     result.meta?.conversationMessageId,
   );
+  if (shouldClearRememberedMenu) {
+    forgetVkInteractiveMessageId({
+      accountId: account.accountId,
+      peerId: params.to,
+    });
+  }
   if (rememberedConversationMessageId) {
     rememberVkInteractiveMessageId({
       accountId: account.accountId,

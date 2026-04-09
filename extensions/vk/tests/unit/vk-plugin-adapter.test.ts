@@ -192,7 +192,7 @@ describe("vk plugin adapters", () => {
     expect(commandsData).toEqual({
       vk: {
         inline: true,
-        oneTime: false,
+        oneTime: true,
         buttons: [
           [
             { text: "Models", callback_data: "/models" },
@@ -202,6 +202,7 @@ describe("vk plugin adapters", () => {
             { text: "Tools", callback_data: "/tools" },
             { text: "Help", callback_data: "/help" },
           ],
+          [{ text: "Close", callback_data: "/vk-menu-close" }],
         ],
       },
     });
@@ -217,13 +218,14 @@ describe("vk plugin adapters", () => {
     expect(providerData).toEqual({
       vk: {
         inline: true,
-        oneTime: false,
+        oneTime: true,
         buttons: [
           [
             { text: "anthropic (2)", callback_data: "/models anthropic" },
             { text: "openai (5)", callback_data: "/models openai" },
           ],
           [{ text: "Next >", callback_data: "/models 2" }],
+          [{ text: "Close", callback_data: "/vk-menu-close" }],
         ],
       },
     });
@@ -256,6 +258,7 @@ describe("vk plugin adapters", () => {
       "minimax-cn (2)",
       "< Prev",
       "Next >",
+      "Close",
     ]);
 
     const listData = vkPlugin.commands?.buildModelsListChannelData?.({
@@ -273,14 +276,17 @@ describe("vk plugin adapters", () => {
     expect(listData).toEqual({
       vk: {
         inline: true,
-        oneTime: false,
+        oneTime: true,
         buttons: [
           [
             { text: "GPT-5.4 ✓", callback_data: "/model openai/gpt-5.4" },
             { text: "GPT-5.2 Codex", callback_data: "/model openai/gpt-5.2-codex" },
           ],
           [{ text: "Next >", callback_data: "/models openai 2" }],
-          [{ text: "< Back", callback_data: "/models" }],
+          [
+            { text: "< Back", callback_data: "/models" },
+            { text: "Close", callback_data: "/vk-menu-close" },
+          ],
         ],
       },
     });
@@ -311,13 +317,17 @@ describe("vk plugin adapters", () => {
       "gpt-4o",
       "< Prev",
       "< Back",
+      "Close",
     ]);
 
     expect(vkPlugin.commands?.buildModelBrowseChannelData?.()).toEqual({
       vk: {
         inline: true,
-        oneTime: false,
-        buttons: [[{ text: "Browse providers", callback_data: "/models" }]],
+        oneTime: true,
+        buttons: [
+          [{ text: "Browse providers", callback_data: "/models" }],
+          [{ text: "Close", callback_data: "/vk-menu-close" }],
+        ],
       },
     });
   });
@@ -329,7 +339,7 @@ describe("vk plugin adapters", () => {
         if (url.pathname === "/method/messages.send") {
           const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
           expect(keyboard.inline).toBe(true);
-          expect(keyboard.one_time).toBe(false);
+          expect(keyboard.one_time).toBe(true);
           expect(keyboard.buttons[0][0].action.type).toBe("callback");
           expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
         }
@@ -371,7 +381,7 @@ describe("vk plugin adapters", () => {
         if (url.pathname === "/method/messages.send") {
           const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
           expect(keyboard.inline ?? false).toBe(false);
-          expect(keyboard.one_time).toBe(false);
+          expect(keyboard.one_time).toBe(true);
           expect(keyboard.buttons[0][0].action.type).toBe("text");
           expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
         }

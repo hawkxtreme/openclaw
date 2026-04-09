@@ -11,6 +11,8 @@ type VkCommandSuggestion = {
   command: string;
 };
 
+export const VK_CLOSE_MENU_COMMAND = "/vk-menu-close";
+
 const MODELS_PAGE_SIZE = 6;
 const PROVIDERS_PAGE_SIZE = 8;
 const PROVIDERS_PER_ROW = 2;
@@ -18,7 +20,7 @@ const MODELS_PER_ROW = 2;
 const MAX_MODEL_LABEL_CHARS = 36;
 const COMMAND_SUGGESTIONS_PER_ROW = 2;
 const VK_PRIMARY_COMMAND_SUGGESTIONS: readonly VkCommandSuggestion[] = [
-  { label: "Commands", command: "/commands" },
+  { label: "Menu", command: "/commands" },
   { label: "Help", command: "/help" },
   { label: "New", command: "/new" },
   { label: "Reset", command: "/reset" },
@@ -36,6 +38,38 @@ const VK_COMMAND_SUGGESTIONS: readonly VkCommandSuggestion[] = [
   { label: "Tasks", command: "/tasks" },
   { label: "Whoami", command: "/whoami" },
 ];
+
+const VK_COMMAND_ALIASES = new Map<string, string>([
+  ["menu", "/commands"],
+  ["commands", "/commands"],
+  ["help", "/help"],
+  ["new", "/new"],
+  ["reset", "/reset"],
+  ["model", "/model"],
+  ["models", "/models"],
+  ["status", "/status"],
+  ["tools", "/tools"],
+  ["compact", "/compact"],
+  ["context", "/context"],
+  ["stop", "/stop"],
+  ["tasks", "/tasks"],
+  ["whoami", "/whoami"],
+  ["меню", "/commands"],
+  ["команды", "/commands"],
+  ["помощь", "/help"],
+  ["новый", "/new"],
+  ["сброс", "/reset"],
+  ["модель", "/model"],
+  ["модели", "/models"],
+  ["статус", "/status"],
+  ["инструменты", "/tools"],
+  ["стоп", "/stop"],
+  ["задачи", "/tasks"],
+  ["cancel", VK_CLOSE_MENU_COMMAND],
+  ["close", VK_CLOSE_MENU_COMMAND],
+  ["отмена", VK_CLOSE_MENU_COMMAND],
+  ["закрыть", VK_CLOSE_MENU_COMMAND],
+]);
 
 function chunkButtons(buttons: readonly VkReplyButton[], size: number): VkReplyButtons {
   const rows: VkReplyButton[][] = [];
@@ -71,6 +105,13 @@ function truncateLabel(value: string, maxChars = MAX_MODEL_LABEL_CHARS): string 
     return value.trim();
   }
   return `${chars.slice(0, maxChars - 3).join("")}...`;
+}
+
+function appendCloseRow(rows: VkReplyButton[][]): VkReplyButton[][] {
+  return [
+    ...rows,
+    [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],
+  ];
 }
 
 function isCurrentModelSelection(params: {
@@ -119,9 +160,9 @@ export function buildVkCommandsListChannelData(params: {
     rows.push(pagination);
   }
 
-  return toChannelData(rows, {
+  return toChannelData(appendCloseRow(rows), {
     inline: true,
-    oneTime: false,
+    oneTime: true,
   });
 }
 
@@ -160,9 +201,9 @@ export function buildVkModelsProviderChannelData(params: {
     rows.push(pagination);
   }
 
-  return toChannelData(rows, {
+  return toChannelData(appendCloseRow(rows), {
     inline: true,
-    oneTime: false,
+    oneTime: true,
   });
 }
 
@@ -216,11 +257,15 @@ export function buildVkModelsListChannelData(params: {
       text: "< Back",
       callback_data: "/models",
     },
+    {
+      text: "Close",
+      callback_data: VK_CLOSE_MENU_COMMAND,
+    },
   ]);
 
   return toChannelData(rows, {
     inline: true,
-    oneTime: false,
+    oneTime: true,
   });
 }
 
@@ -228,10 +273,21 @@ export function buildVkModelBrowseChannelData(): ReplyPayload["channelData"] {
   return {
     vk: {
       inline: true,
-      oneTime: false,
-      buttons: [[{ text: "Browse providers", callback_data: "/models" }]],
+      oneTime: true,
+      buttons: [
+        [{ text: "Browse providers", callback_data: "/models" }],
+        [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],
+      ],
     },
   };
+}
+
+export function normalizeVkCommandShortcut(body: string): string {
+  const normalized = body.trim();
+  if (!normalized) {
+    return normalized;
+  }
+  return VK_COMMAND_ALIASES.get(normalized.toLowerCase()) ?? normalized;
 }
 
 export function resolveVkSlashCommandSuggestionReply(
@@ -256,16 +312,18 @@ export function resolveVkSlashCommandSuggestionReply(
   }
 
   const channelData = toChannelData(
-    chunkButtons(
-      matches.map((entry) => ({
-        text: entry.label,
-        callback_data: entry.command,
-      })),
-      COMMAND_SUGGESTIONS_PER_ROW,
+    appendCloseRow(
+      chunkButtons(
+        matches.map((entry) => ({
+          text: entry.label,
+          callback_data: entry.command,
+        })),
+        COMMAND_SUGGESTIONS_PER_ROW,
+      ) as VkReplyButton[][],
     ),
     {
       inline: true,
-      oneTime: false,
+      oneTime: true,
     },
   );
   if (!channelData) {
@@ -275,8 +333,8 @@ export function resolveVkSlashCommandSuggestionReply(
   return {
     text:
       normalized === "/"
-        ? "VK does not support inline slash autocomplete. Choose a command:"
-        : `VK does not support inline slash autocomplete. Matches for ${normalized}:`,
+        ? "VK uses buttons for command menus. Choose a command:"
+        : "VK uses buttons for command menus. Matching commands:",
     channelData,
   };
 }
