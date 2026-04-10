@@ -44,6 +44,11 @@ async function loadToolsHarness(options?: {
       }>;
     }>;
   };
+  buildThreadingToolContext?: () => {
+    currentChannelId?: string;
+    currentMessageId?: string;
+    currentThreadTs?: string;
+  };
 }) {
   vi.resetModules();
   vi.doMock("../../agents/agent-scope.js", async () => {
@@ -97,10 +102,12 @@ async function loadToolsHarness(options?: {
     resolveEffectiveToolInventory: resolveToolsMock,
   }));
   vi.doMock("./agent-runner-utils.js", () => ({
-    buildThreadingToolContext: () => ({
-      currentChannelId: "channel-123",
-      currentMessageId: "message-456",
-    }),
+    buildThreadingToolContext:
+      options?.buildThreadingToolContext ??
+      (() => ({
+        currentChannelId: "channel-123",
+        currentMessageId: "message-456",
+      })),
   }));
   vi.doMock("./reply-threading.js", () => ({
     resolveReplyToMode: () => "all",
@@ -374,7 +381,76 @@ describe("handleToolsCommand", () => {
     await handleToolsCommand(groupParams, true);
 
     expect(resolveToolsMock).toHaveBeenCalledTimes(1);
-  });
+  }, 180_000);
+
+  it("reuses the cached inventory while browsing VK tool menus across message ids", async () => {
+    let threadingContextCall = 0;
+    const threadingContexts = [
+      { currentChannelId: "channel-123", currentMessageId: "message-1" },
+      { currentChannelId: "channel-123", currentMessageId: "message-2" },
+      { currentChannelId: "channel-123", currentMessageId: "message-3" },
+    ];
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } = await loadToolsHarness(
+      {
+        channelPlugin: {
+          commands: {
+            buildToolsGroupListChannelData: vi.fn(() => ({ vk: { kind: "groups" } })),
+            buildToolsListChannelData: vi.fn(() => ({ vk: { kind: "group" } })),
+            buildToolDetailsChannelData: vi.fn(() => ({ vk: { kind: "tool" } })),
+          },
+        },
+        resolveTools: () => ({
+          agentId: "main",
+          profile: "coding",
+          groups: [
+            {
+              id: "core" as const,
+              label: "Built-in tools",
+              source: "core" as const,
+              tools: [
+                {
+                  id: "agents_list",
+                  label: "Agents",
+                  description: "List active agents",
+                  source: "core" as const,
+                },
+              ],
+            },
+          ],
+        }),
+        buildThreadingToolContext: () => {
+          const nextContext =
+            threadingContexts[Math.min(threadingContextCall, threadingContexts.length - 1)];
+          threadingContextCall += 1;
+          return nextContext;
+        },
+      },
+    );
+    const rootParams = buildCommandTestParams(
+      "/tools",
+      buildConfig(),
+      { Surface: "vk", Provider: "vk" },
+      { workspaceDir: "/tmp" },
+    );
+    const groupParams = buildCommandTestParams(
+      "/tools core",
+      buildConfig(),
+      { Surface: "vk", Provider: "vk" },
+      { workspaceDir: "/tmp" },
+    );
+    const toolParams = buildCommandTestParams(
+      "/tools core agents_list",
+      buildConfig(),
+      { Surface: "vk", Provider: "vk" },
+      { workspaceDir: "/tmp" },
+    );
+
+    await handleToolsCommand(rootParams, true);
+    await handleToolsCommand(groupParams, true);
+    await handleToolsCommand(toolParams, true);
+
+    expect(resolveToolsMock).toHaveBeenCalledTimes(1);
+  }, 180_000);
 
   it("ignores unauthorized senders", async () => {
     const { buildCommandTestParams, handleToolsCommand } = await loadToolsHarness();

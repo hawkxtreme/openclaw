@@ -72,6 +72,13 @@ function normalizeCacheKeyPart(value: string | number | boolean | null | undefin
   return String(value).trim();
 }
 
+function normalizeMessageContextCacheKeyPart(value: string | number | null | undefined): string {
+  if (typeof value === "number") {
+    return "1";
+  }
+  return typeof value === "string" && value.trim().length > 0 ? "1" : "";
+}
+
 function pruneToolsInventoryCache(now: number): void {
   for (const [key, entry] of toolsInventoryCache) {
     if (entry.expiresAt <= now) {
@@ -105,7 +112,10 @@ function buildToolsInventoryCacheKey(params: ResolveEffectiveToolInventoryParams
     normalizeCacheKeyPart(params.modelId),
     normalizeCacheKeyPart(params.currentChannelId),
     normalizeCacheKeyPart(params.currentThreadTs),
-    normalizeCacheKeyPart(params.currentMessageId),
+    // VK long-poll keyboards emit a fresh message id on every tap. Keying the
+    // inventory cache by the exact id defeats browsing reuse even though the
+    // available tool set is the same while the user stays in the same thread.
+    normalizeMessageContextCacheKeyPart(params.currentMessageId),
     normalizeCacheKeyPart(params.groupId),
     normalizeCacheKeyPart(params.groupChannel),
     normalizeCacheKeyPart(params.groupSpace),
@@ -426,7 +436,7 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
       agentIds: params.agentId ? [params.agentId] : undefined,
     });
   const surface = params.ctx.Surface;
-  const commandPlugin = surface ? getChannelPlugin(surface) : null;
+  const commandPlugin = surface ? (getChannelPlugin(surface) ?? undefined) : undefined;
   const paginated = buildCommandsMessagePaginated(params.cfg, skillCommands, {
     page: parsedPage.page,
     surface,
@@ -462,7 +472,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
   const normalized = params.command.commandBodyNormalized;
   const surface = params.ctx.Surface;
-  const commandPlugin = surface ? getChannelPlugin(surface) : null;
+  const commandPlugin = surface ? (getChannelPlugin(surface) ?? undefined) : undefined;
   const interactiveTarget = hasInteractiveToolsSupport(commandPlugin)
     ? parseInteractiveToolsTarget(normalized)
     : null;
