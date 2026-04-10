@@ -775,6 +775,87 @@ describe("vk inbound handling", () => {
     });
   });
 
+  it("restores the long-poll root keyboard when closing an active DM menu", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 1,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "long-poll",
+          accessToken: "replace-me-longpoll-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+    rememberVkInteractiveMessageId({
+      accountId: account.accountId,
+      peerId: "42",
+      conversationMessageId: "200",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "long-poll",
+        eventType: "message_new",
+        dedupeKey: "event:close-menu-longpoll-1",
+        messageId: "5091",
+        peerId: 42,
+        senderId: 42,
+        text: "Close",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    expect(requestedUrls.some((url) => url.pathname === "/method/messages.edit")).toBe(false);
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "Menu collapsed. Open the keyboard to continue.",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.inline ?? false).toBe(false);
+    expect(keyboard.one_time).toBe(false);
+    expect(keyboard.buttons).toHaveLength(5);
+    expect(keyboard.buttons[0][0].action.label).toBe("Menu");
+    expect(keyboard.buttons[0][1].action.label).toBe("Help");
+    expect(keyboard.buttons[3][0].action.label).toBe("Status");
+    expect(keyboard.buttons[3][1].action.label).toBe("Tools");
+    expect(keyboard.buttons[4][0].action.label).toBe("Close");
+  });
+
   it("routes allowed group messages through the shared reply dispatcher", async () => {
     const cfg: OpenClawConfig = {
       channels: {

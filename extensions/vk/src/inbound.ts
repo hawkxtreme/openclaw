@@ -77,6 +77,35 @@ function attachVkMenuBehavior(payload: unknown, menuBehavior: VkMenuBehavior): u
   };
 }
 
+function buildVkCloseMenuPayload(account: ResolvedVkAccount): {
+  text: string;
+  channelData: {
+    vk: {
+      menuBehavior: VkMenuBehavior;
+    };
+  };
+} {
+  if (account.config.transport === "long-poll") {
+    return {
+      text: "Menu collapsed. Open the keyboard to continue.",
+      channelData: {
+        vk: {
+          menuBehavior: "root",
+        },
+      },
+    };
+  }
+
+  return {
+    text: "Menu hidden. Tap Menu to reopen.",
+    channelData: {
+      vk: {
+        menuBehavior: "collapse",
+      },
+    },
+  };
+}
+
 function normalizeVkAllowEntry(entry: string): string | "*" | null {
   const trimmed = entry.trim();
   if (!trimmed) {
@@ -291,14 +320,7 @@ export async function handleVkInboundMessage(params: {
         to: String(message.peerId),
         replyToId,
         editConversationMessageId,
-        payload: {
-          text: "Menu hidden. Tap Menu to reopen.",
-          channelData: {
-            vk: {
-              menuBehavior: "collapse",
-            },
-          },
-        },
+        payload: buildVkCloseMenuPayload(account),
         statusSink,
       });
       return;
@@ -477,14 +499,7 @@ export async function handleVkInboundMessage(params: {
       to: String(message.peerId),
       replyToId,
       editConversationMessageId,
-      payload: {
-        text: "Menu hidden. Tap Menu to reopen.",
-        channelData: {
-          vk: {
-            menuBehavior: "collapse",
-          },
-        },
-      },
+      payload: buildVkCloseMenuPayload(account),
       statusSink,
     });
     return;
