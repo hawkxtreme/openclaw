@@ -1353,7 +1353,7 @@ describe("vk inbound handling", () => {
     expect(requestedUrls[4]?.searchParams.get("message")).toBe("Models (proxy) — 3 available");
   });
 
-  it("sends long-poll terminal command replies as fresh messages with a collapsed launcher", async () => {
+  it("keeps the long-poll root command keyboard after a terminal command reply", async () => {
     resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
       access: {
         decision: "allow",
@@ -1460,6 +1460,78 @@ describe("vk inbound handling", () => {
               type: "text",
               label: "Menu",
               payload: JSON.stringify({ oc: "/commands" }),
+            },
+            color: "secondary",
+          },
+          {
+            action: {
+              type: "text",
+              label: "Help",
+              payload: JSON.stringify({ oc: "/help" }),
+            },
+            color: "secondary",
+          },
+        ],
+        [
+          {
+            action: {
+              type: "text",
+              label: "New",
+              payload: JSON.stringify({ oc: "/new" }),
+            },
+            color: "secondary",
+          },
+          {
+            action: {
+              type: "text",
+              label: "Reset",
+              payload: JSON.stringify({ oc: "/reset" }),
+            },
+            color: "secondary",
+          },
+        ],
+        [
+          {
+            action: {
+              type: "text",
+              label: "Model",
+              payload: JSON.stringify({ oc: "/model" }),
+            },
+            color: "secondary",
+          },
+          {
+            action: {
+              type: "text",
+              label: "Models",
+              payload: JSON.stringify({ oc: "/models" }),
+            },
+            color: "secondary",
+          },
+        ],
+        [
+          {
+            action: {
+              type: "text",
+              label: "Status",
+              payload: JSON.stringify({ oc: "/status" }),
+            },
+            color: "secondary",
+          },
+          {
+            action: {
+              type: "text",
+              label: "Tools",
+              payload: JSON.stringify({ oc: "/tools" }),
+            },
+            color: "secondary",
+          },
+        ],
+        [
+          {
+            action: {
+              type: "text",
+              label: "Close",
+              payload: JSON.stringify({ oc: "/vk-menu-close" }),
             },
             color: "secondary",
           },

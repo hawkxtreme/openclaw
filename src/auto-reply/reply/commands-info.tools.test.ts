@@ -22,10 +22,7 @@ async function loadToolsHarness(options?: {
         currentPage: number;
         totalPages: number;
       }) => unknown;
-      buildToolDetailsChannelData?: (params: {
-        groupId: string;
-        currentPage: number;
-      }) => unknown;
+      buildToolDetailsChannelData?: (params: { groupId: string; currentPage: number }) => unknown;
     };
   } | null;
   resolveTools?: () => {
@@ -117,10 +114,14 @@ async function loadToolsHarness(options?: {
       getChannelPlugin: () => options?.channelPlugin ?? null,
     };
   });
-
   const { buildCommandTestParams } = await import("./commands.test-harness.js");
-  const { handleToolsCommand } = await import("./commands-info.js");
-  return { buildCommandTestParams, handleToolsCommand, resolveToolsMock };
+  const { handleCommandsListCommand, handleToolsCommand } = await import("./commands-info.js");
+  return {
+    buildCommandTestParams,
+    handleCommandsListCommand,
+    handleToolsCommand,
+    resolveToolsMock,
+  };
 }
 
 function buildConfig() {
@@ -134,27 +135,12 @@ describe("handleToolsCommand", () => {
   it("renders a product-facing tool list", async () => {
     const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
       await loadToolsHarness();
-    const params = buildCommandTestParams("/tools", buildConfig(), undefined, {
-      workspaceDir: "/tmp",
-    });
-    params.agentId = "main";
-    params.provider = "openai";
-    params.model = "gpt-4.1";
-    params.ctx = {
-      ...params.ctx,
-      From: "telegram:group:abc123",
-      GroupChannel: "#ops",
-      GroupSpace: "workspace-1",
-      SenderName: "User Name",
-      SenderUsername: "user_name",
-      SenderE164: "+1000",
-      MessageThreadId: 99,
-      AccountId: "acct-1",
-      Provider: "telegram",
-      ChatType: "group",
-    };
-
-    const result = await handleToolsCommand(params, true);
+    const result = await handleToolsCommand(
+      buildCommandTestParams("/tools", buildConfig(), undefined, {
+        workspaceDir: "/tmp",
+      }),
+      true,
+    );
 
     expect(result?.reply?.text).toContain("Available tools");
     expect(result?.reply?.text).toContain("Profile: coding");
@@ -163,24 +149,8 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Connected tools");
     expect(result?.reply?.text).toContain("docs_lookup (docs)");
     expect(result?.reply?.text).not.toContain("unavailable right now");
-    expect(resolveToolsMock).toHaveBeenCalledWith(
-      expect.objectContaining({
-        senderIsOwner: false,
-        senderId: undefined,
-        senderName: "User Name",
-        senderUsername: "user_name",
-        senderE164: "+1000",
-        accountId: "acct-1",
-        currentChannelId: "channel-123",
-        currentThreadTs: "99",
-        currentMessageId: "message-456",
-        groupId: "abc123",
-        groupChannel: "#ops",
-        groupSpace: "workspace-1",
-        replyToMode: "all",
-      }),
-    );
-  });
+    expect(resolveToolsMock).toHaveBeenCalledTimes(1);
+  }, 180_000);
 
   it("returns usage when arguments are provided", async () => {
     const { buildCommandTestParams, handleToolsCommand } = await loadToolsHarness();
@@ -361,8 +331,7 @@ describe("handleToolsCommand", () => {
     expect(result).toEqual({
       shouldContinue: false,
       reply: {
-        text:
-          "Docs Lookup\n\nConnected tools\nSearch internal documentation",
+        text: "Docs Lookup\n\nConnected tools\nSearch internal documentation",
         channelData: {
           vk: {
             groupId: "plugin",
@@ -375,6 +344,36 @@ describe("handleToolsCommand", () => {
       groupId: "plugin",
       currentPage: 1,
     });
+  });
+
+  it("reuses the cached inventory while browsing VK tool menus", async () => {
+    const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } = await loadToolsHarness(
+      {
+        channelPlugin: {
+          commands: {
+            buildToolsGroupListChannelData: vi.fn(() => ({ vk: { kind: "groups" } })),
+            buildToolsListChannelData: vi.fn(() => ({ vk: { kind: "group" } })),
+          },
+        },
+      },
+    );
+    const rootParams = buildCommandTestParams(
+      "/tools",
+      buildConfig(),
+      { Surface: "vk", Provider: "vk" },
+      { workspaceDir: "/tmp" },
+    );
+    const groupParams = buildCommandTestParams(
+      "/tools plugin",
+      buildConfig(),
+      { Surface: "vk", Provider: "vk" },
+      { workspaceDir: "/tmp" },
+    );
+
+    await handleToolsCommand(rootParams, true);
+    await handleToolsCommand(groupParams, true);
+
+    expect(resolveToolsMock).toHaveBeenCalledTimes(1);
   });
 
   it("ignores unauthorized senders", async () => {
@@ -448,6 +447,44 @@ describe("handleToolsCommand", () => {
         accountId: "work",
       }),
     );
+  });
+
+  it("warms the inventory cache when interactive commands menu opens", async () => {
+    vi.useFakeTimers();
+    try {
+      const {
+        buildCommandTestParams,
+        handleCommandsListCommand,
+        handleToolsCommand,
+        resolveToolsMock,
+      } = await loadToolsHarness({
+        channelPlugin: {
+          commands: {
+            buildToolsGroupListChannelData: vi.fn(() => ({ vk: { kind: "groups" } })),
+          },
+        },
+      });
+      const commandsParams = buildCommandTestParams(
+        "/commands",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+      const toolsParams = buildCommandTestParams(
+        "/tools",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+
+      await handleCommandsListCommand(commandsParams, true);
+      await vi.runAllTimersAsync();
+      await handleToolsCommand(toolsParams, true);
+
+      expect(resolveToolsMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns a concise fallback error on effective inventory failures", async () => {

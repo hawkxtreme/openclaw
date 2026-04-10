@@ -507,6 +507,7 @@ function createSetupEntryChannelPluginFixture(params: {
   setupBlurb: string;
   configured: boolean;
   startupDeferConfiguredChannelFullLoadUntilAfterListen?: boolean;
+  bundledSetupContract?: boolean;
 }) {
   useNoBundledPlugins();
   const pluginDir = makeTempDir();
@@ -582,7 +583,30 @@ module.exports = {
   );
   fs.writeFileSync(
     path.join(pluginDir, "setup-entry.cjs"),
-    `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+    params.bundledSetupContract
+      ? `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
+module.exports = {
+  kind: "bundled-channel-setup-entry",
+  loadSetupPlugin() {
+    return {
+      id: ${JSON.stringify(params.id)},
+      meta: {
+        id: ${JSON.stringify(params.id)},
+        label: ${JSON.stringify(params.label)},
+        selectionLabel: ${JSON.stringify(params.label)},
+        docsPath: ${JSON.stringify(`/channels/${params.id}`)},
+        blurb: ${JSON.stringify(params.setupBlurb)},
+      },
+      capabilities: { chatTypes: ["direct"] },
+      config: {
+        listAccountIds: () => ${listAccountIds},
+        resolveAccount: () => ${resolveAccount},
+      },
+      outbound: { deliveryMode: "direct" },
+    };
+  },
+};`
+      : `require("node:fs").writeFileSync(${JSON.stringify(setupMarker)}, "loaded", "utf-8");
 module.exports = {
   plugin: {
     id: ${JSON.stringify(params.id)},
@@ -2717,6 +2741,39 @@ module.exports = {
         }),
       expectFullLoaded: true,
       expectSetupLoaded: false,
+      expectedChannels: 1,
+    },
+    {
+      name: "accepts bundled setup entry contracts for deferred configured channel loads",
+      fixture: {
+        id: "setup-runtime-bundled-contract-test",
+        label: "Setup Runtime Bundled Contract Test",
+        packageName: "@openclaw/setup-runtime-bundled-contract-test",
+        fullBlurb: "full entry should be deferred while startup is still cold",
+        setupBlurb: "setup runtime bundled contract",
+        configured: true,
+        startupDeferConfiguredChannelFullLoadUntilAfterListen: true,
+        bundledSetupContract: true,
+      },
+      load: ({ pluginDir }: { pluginDir: string }) =>
+        loadOpenClawPlugins({
+          cache: false,
+          preferSetupRuntimeForChannelPlugins: true,
+          config: {
+            channels: {
+              "setup-runtime-bundled-contract-test": {
+                enabled: true,
+                token: "configured",
+              },
+            },
+            plugins: {
+              load: { paths: [pluginDir] },
+              allow: ["setup-runtime-bundled-contract-test"],
+            },
+          },
+        }),
+      expectFullLoaded: false,
+      expectSetupLoaded: true,
       expectedChannels: 1,
     },
   ])("$name", ({ fixture, load, expectFullLoaded, expectSetupLoaded, expectedChannels }) => {

@@ -22,6 +22,8 @@ type VkCommandSuggestion = {
   command: string;
 };
 
+export type VkMenuBehavior = "collapse" | "root";
+
 export const VK_CLOSE_MENU_COMMAND = "/vk-menu-close";
 
 const MODELS_PAGE_SIZE = 6;
@@ -126,6 +128,31 @@ function appendCloseRow(rows: VkReplyButton[][]): VkReplyButton[][] {
   return [...rows, [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }]];
 }
 
+function appendBackAndCloseRow(
+  rows: VkReplyButton[][],
+  backCallbackData: string,
+): VkReplyButton[][] {
+  return [
+    ...rows,
+    [
+      { text: "< Back", callback_data: backCallbackData },
+      { text: "Close", callback_data: VK_CLOSE_MENU_COMMAND },
+    ],
+  ];
+}
+
+function buildVkPrimaryCommandRows(): VkReplyButton[][] {
+  return appendCloseRow(
+    chunkButtons(
+      VK_PRIMARY_COMMAND_SUGGESTIONS.map((entry) => ({
+        text: entry.label,
+        callback_data: entry.command,
+      })),
+      COMMAND_SUGGESTIONS_PER_ROW,
+    ) as VkReplyButton[][],
+  );
+}
+
 function shortenToolGroupLabel(label: string): string {
   switch (label.trim().toLowerCase()) {
     case "built-in tools":
@@ -191,6 +218,14 @@ export function buildVkCommandsListChannelData(params: {
   });
 }
 
+export function buildVkRootCommandKeyboardSpec(params?: { inline?: boolean }): VkKeyboardSpec {
+  return {
+    buttons: buildVkPrimaryCommandRows(),
+    ...(params?.inline ? { inline: true } : {}),
+    oneTime: false,
+  };
+}
+
 export function buildVkModelsProviderChannelData(params: {
   providers: ProviderInfo[];
   currentPage?: number;
@@ -202,8 +237,8 @@ export function buildVkModelsProviderChannelData(params: {
   const currentPage = Math.max(1, params.currentPage ?? 1);
   const totalPages = Math.max(currentPage, params.totalPages ?? currentPage);
   // Live VK callback keyboards reject middle provider pages with 11 buttons
-  // (8 providers + Prev + Next + Close). Reserve room for navigation/close.
-  const reservedControlButtons = (currentPage > 1 ? 1 : 0) + (currentPage < totalPages ? 1 : 0) + 1;
+  // (8 providers + Prev + Next + Back + Close). Reserve room for navigation.
+  const reservedControlButtons = (currentPage > 1 ? 1 : 0) + (currentPage < totalPages ? 1 : 0) + 2;
   const providerButtonLimit = Math.max(
     1,
     Math.min(PROVIDERS_PAGE_SIZE, MAX_INLINE_CALLBACK_BUTTONS - reservedControlButtons),
@@ -233,7 +268,7 @@ export function buildVkModelsProviderChannelData(params: {
     rows.push(pagination);
   }
 
-  return toChannelData(appendCloseRow(rows), {
+  return toChannelData(appendBackAndCloseRow(rows, "/commands"), {
     inline: true,
     oneTime: false,
   });
@@ -350,7 +385,7 @@ export function buildVkToolsGroupListChannelData(params: {
     }
   }
 
-  return toChannelData(appendCloseRow(rows), {
+  return toChannelData(appendBackAndCloseRow(rows, "/commands"), {
     inline: true,
     oneTime: false,
   });
@@ -470,15 +505,17 @@ export function resolveVkSlashCommandSuggestionReply(
   }
 
   const channelData = toChannelData(
-    appendCloseRow(
-      chunkButtons(
-        matches.map((entry) => ({
-          text: entry.label,
-          callback_data: entry.command,
-        })),
-        COMMAND_SUGGESTIONS_PER_ROW,
-      ) as VkReplyButton[][],
-    ),
+    normalized === "/" || normalized === "/commands"
+      ? buildVkPrimaryCommandRows()
+      : appendCloseRow(
+          chunkButtons(
+            matches.map((entry) => ({
+              text: entry.label,
+              callback_data: entry.command,
+            })),
+            COMMAND_SUGGESTIONS_PER_ROW,
+          ) as VkReplyButton[][],
+        ),
     {
       inline: true,
       oneTime: false,

@@ -552,6 +552,18 @@ function resolveSetupChannelRegistration(moduleExport: unknown): {
   if (!resolved || typeof resolved !== "object") {
     return {};
   }
+  const bundledSetupEntry = resolved as {
+    kind?: unknown;
+    loadSetupPlugin?: unknown;
+  };
+  if (
+    bundledSetupEntry.kind === "bundled-channel-setup-entry" &&
+    typeof bundledSetupEntry.loadSetupPlugin === "function"
+  ) {
+    return {
+      plugin: bundledSetupEntry.loadSetupPlugin() as ChannelPlugin,
+    };
+  }
   const setup = resolved as {
     plugin?: unknown;
   };

@@ -1,5 +1,9 @@
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { resolveEffectiveToolInventory } from "../../agents/tools-effective-inventory.js";
+import {
+  resolveEffectiveToolInventory,
+  type EffectiveToolInventoryResult,
+  type ResolveEffectiveToolInventoryParams,
+} from "../../agents/tools-effective-inventory.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
 import { logVerbose } from "../../globals.js";
 import { listSkillCommandsForAgents } from "../skill-commands.js";
@@ -22,6 +26,15 @@ export { handleWhoamiCommand } from "./commands-whoami.js";
 
 const TOOLS_GROUPS_PER_PAGE = 6;
 const TOOLS_PER_PAGE = 6;
+const TOOLS_INVENTORY_CACHE_TTL_MS = 60_000;
+const TOOLS_INVENTORY_CACHE_MAX_ENTRIES = 64;
+
+type ToolsInventoryCacheEntry = {
+  expiresAt: number;
+  result: EffectiveToolInventoryResult;
+};
+
+const toolsInventoryCache = new Map<string, ToolsInventoryCacheEntry>();
 
 type InteractiveToolsGroup = {
   id: string;
@@ -41,10 +54,150 @@ type InteractiveToolsBrowseTarget =
   | { kind: "group"; groupId: string; page: number }
   | { kind: "tool"; groupId: string; toolId: string };
 
-function parseCommandsPageArg(commandBodyNormalized: string):
-  | { matched: false }
-  | { matched: true; page: number }
-  | { matched: true; error: string } {
+function hasInteractiveToolsSupport(commandPlugin: ReturnType<typeof getChannelPlugin>): boolean {
+  return Boolean(
+    commandPlugin?.commands?.buildToolsGroupListChannelData ||
+    commandPlugin?.commands?.buildToolsListChannelData ||
+    commandPlugin?.commands?.buildToolDetailsChannelData,
+  );
+}
+
+function normalizeCacheKeyPart(value: string | number | boolean | null | undefined): string {
+  if (value === true) {
+    return "1";
+  }
+  if (value === false || value === null || value === undefined) {
+    return "";
+  }
+  return String(value).trim();
+}
+
+function pruneToolsInventoryCache(now: number): void {
+  for (const [key, entry] of toolsInventoryCache) {
+    if (entry.expiresAt <= now) {
+      toolsInventoryCache.delete(key);
+    }
+  }
+
+  while (toolsInventoryCache.size > TOOLS_INVENTORY_CACHE_MAX_ENTRIES) {
+    const oldestKey = toolsInventoryCache.keys().next().value;
+    if (typeof oldestKey !== "string") {
+      break;
+    }
+    toolsInventoryCache.delete(oldestKey);
+  }
+}
+
+function buildToolsInventoryCacheKey(params: ResolveEffectiveToolInventoryParams): string {
+  return [
+    normalizeCacheKeyPart(params.agentId),
+    normalizeCacheKeyPart(params.sessionKey),
+    normalizeCacheKeyPart(params.workspaceDir),
+    normalizeCacheKeyPart(params.agentDir),
+    normalizeCacheKeyPart(params.messageProvider),
+    normalizeCacheKeyPart(params.senderIsOwner),
+    normalizeCacheKeyPart(params.senderId),
+    normalizeCacheKeyPart(params.senderName),
+    normalizeCacheKeyPart(params.senderUsername),
+    normalizeCacheKeyPart(params.senderE164),
+    normalizeCacheKeyPart(params.accountId),
+    normalizeCacheKeyPart(params.modelProvider),
+    normalizeCacheKeyPart(params.modelId),
+    normalizeCacheKeyPart(params.currentChannelId),
+    normalizeCacheKeyPart(params.currentThreadTs),
+    normalizeCacheKeyPart(params.currentMessageId),
+    normalizeCacheKeyPart(params.groupId),
+    normalizeCacheKeyPart(params.groupChannel),
+    normalizeCacheKeyPart(params.groupSpace),
+    normalizeCacheKeyPart(params.replyToMode),
+  ].join("\u001f");
+}
+
+function resolveCachedToolsInventory(
+  params: ResolveEffectiveToolInventoryParams,
+): EffectiveToolInventoryResult {
+  const now = Date.now();
+  pruneToolsInventoryCache(now);
+  const cacheKey = buildToolsInventoryCacheKey(params);
+  const cached = toolsInventoryCache.get(cacheKey);
+  if (cached && cached.expiresAt > now) {
+    return cached.result;
+  }
+
+  const result = resolveEffectiveToolInventory(params);
+  toolsInventoryCache.set(cacheKey, {
+    expiresAt: now + TOOLS_INVENTORY_CACHE_TTL_MS,
+    result,
+  });
+  pruneToolsInventoryCache(now);
+  return result;
+}
+
+function resolveToolsInventoryParams(
+  params: Parameters<CommandHandler>[0],
+): ResolveEffectiveToolInventoryParams {
+  const effectiveAccountId = resolveChannelAccountId({
+    cfg: params.cfg,
+    ctx: params.ctx,
+    command: params.command,
+  });
+  const agentId =
+    params.agentId ?? resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
+  const threadingContext = buildThreadingToolContext({
+    sessionCtx: params.ctx,
+    config: params.cfg,
+    hasRepliedRef: undefined,
+  });
+
+  return {
+    cfg: params.cfg,
+    agentId,
+    sessionKey: params.sessionKey,
+    workspaceDir: params.workspaceDir,
+    agentDir: params.agentDir,
+    modelProvider: params.provider,
+    modelId: params.model,
+    messageProvider: params.command.channel,
+    senderIsOwner: params.command.senderIsOwner,
+    senderId: params.command.senderId,
+    senderName: params.ctx.SenderName,
+    senderUsername: params.ctx.SenderUsername,
+    senderE164: params.ctx.SenderE164,
+    accountId: effectiveAccountId,
+    currentChannelId: threadingContext.currentChannelId,
+    currentThreadTs:
+      typeof params.ctx.MessageThreadId === "string" ||
+      typeof params.ctx.MessageThreadId === "number"
+        ? String(params.ctx.MessageThreadId)
+        : undefined,
+    currentMessageId: threadingContext.currentMessageId,
+    groupId: params.sessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
+    groupChannel:
+      params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
+    groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
+    replyToMode: resolveReplyToMode(
+      params.cfg,
+      params.ctx.OriginatingChannel ?? params.ctx.Provider,
+      effectiveAccountId,
+      params.ctx.ChatType,
+    ),
+  };
+}
+
+function warmToolsInventoryInBackground(params: Parameters<CommandHandler>[0]): void {
+  const inventoryParams = resolveToolsInventoryParams(params);
+  setTimeout(() => {
+    try {
+      resolveCachedToolsInventory(inventoryParams);
+    } catch {
+      // Ignore warm-up failures; the actual /tools command will surface a user-facing error.
+    }
+  }, 0);
+}
+
+function parseCommandsPageArg(
+  commandBodyNormalized: string,
+): { matched: false } | { matched: true; page: number } | { matched: true; error: string } {
   const normalized = commandBodyNormalized.trim();
   if (normalized === "/commands") {
     return { matched: true, page: 1 };
@@ -53,7 +206,10 @@ function parseCommandsPageArg(commandBodyNormalized: string):
     return { matched: false };
   }
 
-  const rawArg = normalized.replace(/^\/commands\b/i, "").trim().toLowerCase();
+  const rawArg = normalized
+    .replace(/^\/commands\b/i, "")
+    .trim()
+    .toLowerCase();
   if (!rawArg) {
     return { matched: true, page: 1 };
   }
@@ -114,7 +270,9 @@ function parseInteractiveToolsTarget(
   };
 }
 
-function buildInteractiveToolsGroups(result: EffectiveToolInventoryResult): InteractiveToolsGroup[] {
+function buildInteractiveToolsGroups(
+  result: EffectiveToolInventoryResult,
+): InteractiveToolsGroup[] {
   return result.groups
     .map((group) => ({
       id: group.id,
@@ -288,6 +446,10 @@ export const handleCommandsListCommand: CommandHandler = async (params, allowTex
     };
   }
 
+  if (parsedPage.page === 1 && hasInteractiveToolsSupport(commandPlugin)) {
+    warmToolsInventoryInBackground(params);
+  }
+
   return {
     shouldContinue: false,
     reply: { text: buildCommandsMessage(params.cfg, skillCommands, { surface }) },
@@ -301,12 +463,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   const normalized = params.command.commandBodyNormalized;
   const surface = params.ctx.Surface;
   const commandPlugin = surface ? getChannelPlugin(surface) : null;
-  const hasInteractiveToolsSupport = Boolean(
-    commandPlugin?.commands?.buildToolsGroupListChannelData ||
-      commandPlugin?.commands?.buildToolsListChannelData ||
-      commandPlugin?.commands?.buildToolDetailsChannelData,
-  );
-  const interactiveTarget = hasInteractiveToolsSupport
+  const interactiveTarget = hasInteractiveToolsSupport(commandPlugin)
     ? parseInteractiveToolsTarget(normalized)
     : null;
   let verbose = false;
@@ -329,52 +486,7 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const effectiveAccountId = resolveChannelAccountId({
-      cfg: params.cfg,
-      ctx: params.ctx,
-      command: params.command,
-    });
-    const agentId =
-      params.agentId ??
-      resolveSessionAgentId({ sessionKey: params.sessionKey, config: params.cfg });
-    const threadingContext = buildThreadingToolContext({
-      sessionCtx: params.ctx,
-      config: params.cfg,
-      hasRepliedRef: undefined,
-    });
-    const result = resolveEffectiveToolInventory({
-      cfg: params.cfg,
-      agentId,
-      sessionKey: params.sessionKey,
-      workspaceDir: params.workspaceDir,
-      agentDir: params.agentDir,
-      modelProvider: params.provider,
-      modelId: params.model,
-      messageProvider: params.command.channel,
-      senderIsOwner: params.command.senderIsOwner,
-      senderId: params.command.senderId,
-      senderName: params.ctx.SenderName,
-      senderUsername: params.ctx.SenderUsername,
-      senderE164: params.ctx.SenderE164,
-      accountId: effectiveAccountId,
-      currentChannelId: threadingContext.currentChannelId,
-      currentThreadTs:
-        typeof params.ctx.MessageThreadId === "string" ||
-        typeof params.ctx.MessageThreadId === "number"
-          ? String(params.ctx.MessageThreadId)
-          : undefined,
-      currentMessageId: threadingContext.currentMessageId,
-      groupId: params.sessionEntry?.groupId ?? extractExplicitGroupId(params.ctx.From),
-      groupChannel:
-        params.sessionEntry?.groupChannel ?? params.ctx.GroupChannel ?? params.ctx.GroupSubject,
-      groupSpace: params.sessionEntry?.space ?? params.ctx.GroupSpace,
-      replyToMode: resolveReplyToMode(
-        params.cfg,
-        params.ctx.OriginatingChannel ?? params.ctx.Provider,
-        effectiveAccountId,
-        params.ctx.ChatType,
-      ),
-    });
+    const result = resolveCachedToolsInventory(resolveToolsInventoryParams(params));
     const interactiveReply = commandPlugin
       ? buildInteractiveToolsReply({
           result,
