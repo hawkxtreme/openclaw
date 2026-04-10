@@ -1,12 +1,6 @@
-import {
-  DEFAULT_VK_API_VERSION,
-  type VkGroupSummary,
-} from "../types/config.js";
+import { DEFAULT_VK_API_VERSION, type VkGroupSummary } from "../types/config.js";
 import type { VkFormatData } from "../types/format.js";
-import type {
-  VkLongPollResponse,
-  VkLongPollServer,
-} from "../types/longpoll.js";
+import type { VkLongPollResponse, VkLongPollServer } from "../types/longpoll.js";
 
 const VK_API_BASE = "https://api.vk.com/method";
 const VK_INTERACTIVE_HISTORY_COUNT = 50;
@@ -32,12 +26,15 @@ export class VkApiError extends Error {
   }
 }
 
+export type VkLongPollSettings = {
+  is_enabled?: boolean | number;
+  events?: Record<string, number | boolean | undefined>;
+};
+
 async function readVkEnvelope(
   response: Response,
 ): Promise<VkApiResponse<unknown> | VkApiErrorResponse> {
-  return await readVkJson<VkApiResponse<unknown> | VkApiErrorResponse>(
-    response,
-  );
+  return await readVkJson<VkApiResponse<unknown> | VkApiErrorResponse>(response);
 }
 
 async function readVkJson<T>(response: Response): Promise<T> {
@@ -89,15 +86,13 @@ function normalizeGroupsByIdResponse(response: unknown): VkGroupSummary[] {
       : [];
 
   return groups
-    .filter(
-      (group): group is { id: number; name?: string; screen_name?: string } => {
-        return (
-          typeof group === "object" &&
-          group !== null &&
-          typeof (group as { id?: unknown }).id === "number"
-        );
-      },
-    )
+    .filter((group): group is { id: number; name?: string; screen_name?: string } => {
+      return (
+        typeof group === "object" &&
+        group !== null &&
+        typeof (group as { id?: unknown }).id === "number"
+      );
+    })
     .map((group) => ({
       id: group.id,
       name: group.name,
@@ -136,6 +131,25 @@ export async function getVkLongPollServer(params: {
   return await vkApi<VkLongPollServer>({
     token: params.token,
     method: "groups.getLongPollServer",
+    apiVersion: params.apiVersion,
+    query: {
+      group_id: params.groupId,
+    },
+    signal: params.signal,
+    fetchImpl: params.fetchImpl,
+  });
+}
+
+export async function getVkLongPollSettings(params: {
+  token: string;
+  groupId: number;
+  apiVersion?: string;
+  signal?: AbortSignal;
+  fetchImpl?: typeof fetch;
+}): Promise<VkLongPollSettings> {
+  return await vkApi<VkLongPollSettings>({
+    token: params.token,
+    method: "groups.getLongPollSettings",
     apiVersion: params.apiVersion,
     query: {
       group_id: params.groupId,
@@ -197,9 +211,7 @@ export async function sendVkMessage(params: {
     query: {
       peer_id: params.peerId,
       message: params.message,
-      format_data: params.formatData
-        ? JSON.stringify(params.formatData)
-        : undefined,
+      format_data: params.formatData ? JSON.stringify(params.formatData) : undefined,
       attachment: params.attachment,
       keyboard: params.keyboard,
       random_id: params.randomId,
@@ -247,9 +259,7 @@ export async function resolveVkConversationMessageIdForMessage(params: {
     if (String(record.id ?? "").trim() !== targetMessageId) {
       continue;
     }
-    const conversationMessageId = String(
-      record.conversation_message_id ?? "",
-    ).trim();
+    const conversationMessageId = String(record.conversation_message_id ?? "").trim();
     if (/^\d+$/u.test(conversationMessageId)) {
       return conversationMessageId;
     }
@@ -279,8 +289,7 @@ export async function resolveVkLatestInteractiveConversationMessageId(params: {
     fetchImpl: params.fetchImpl,
   });
 
-  return extractVkInteractiveMessageSummaries(response.items ?? [])[0]
-    ?.conversationMessageId;
+  return extractVkInteractiveMessageSummaries(response.items ?? [])[0]?.conversationMessageId;
 }
 
 export type VkInteractiveMessageSummary = {
@@ -306,9 +315,7 @@ export function extractVkInteractiveMessageSummaries(
     if (record.out !== 1 || typeof record.keyboard !== "object" || record.keyboard === null) {
       continue;
     }
-    const conversationMessageId = String(
-      record.conversation_message_id ?? "",
-    ).trim();
+    const conversationMessageId = String(record.conversation_message_id ?? "").trim();
     if (/^\d+$/u.test(conversationMessageId)) {
       result.push({
         conversationMessageId,
@@ -375,9 +382,7 @@ export async function editVkMessage(params: {
       peer_id: params.peerId,
       cmid: params.conversationMessageId,
       message: params.message,
-      format_data: params.formatData
-        ? JSON.stringify(params.formatData)
-        : undefined,
+      format_data: params.formatData ? JSON.stringify(params.formatData) : undefined,
       keyboard: params.keyboard,
       disable_mentions: params.disableMentions ? 1 : undefined,
       dont_parse_links: params.dontParseLinks ? 1 : undefined,
@@ -429,9 +434,7 @@ export async function sendVkMessageEventAnswer(params: {
       user_id: params.userId,
       peer_id: params.peerId,
       event_data:
-        typeof params.eventData === "string"
-          ? params.eventData
-          : JSON.stringify(params.eventData),
+        typeof params.eventData === "string" ? params.eventData : JSON.stringify(params.eventData),
     },
     signal: params.signal,
     fetchImpl: params.fetchImpl,
@@ -440,9 +443,7 @@ export async function sendVkMessageEventAnswer(params: {
 
 function normalizeVkUploadUrl(response: unknown, errorMessage: string): string {
   const record =
-    typeof response === "object" &&
-    response !== null &&
-    !Array.isArray(response)
+    typeof response === "object" && response !== null && !Array.isArray(response)
       ? (response as Record<string, unknown>)
       : null;
   const uploadUrl =
