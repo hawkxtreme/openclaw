@@ -17,9 +17,7 @@ export class VkConfigError extends Error {
 
   constructor(issues: VkConfigIssue[]) {
     super(
-      `Invalid VK config: ${issues
-        .map((issue) => `${issue.path}: ${issue.message}`)
-        .join("; ")}`,
+      `Invalid VK config: ${issues.map((issue) => `${issue.path}: ${issue.message}`).join("; ")}`,
     );
     this.name = "VkConfigError";
     this.issues = issues;
@@ -62,9 +60,6 @@ function normalizeTransport(value: unknown): VkTransport | undefined {
   }
 
   switch (normalized) {
-    case "callback":
-    case "callback-api":
-      return "callback-api";
     case "longpoll":
     case "long-poll":
       return "long-poll";
@@ -195,11 +190,7 @@ function normalizeCallback(value: unknown): VkCallbackConfig | undefined {
   const path = normalizeString(value.path);
   const secret = normalizeString(value.secret);
   const confirmationCode = normalizeString(value.confirmationCode);
-  const normalizedPath = path
-    ? path.startsWith("/")
-      ? path
-      : `/${path}`
-    : undefined;
+  const normalizedPath = path ? (path.startsWith("/") ? path : `/${path}`) : undefined;
 
   if (!normalizedPath && !secret && !confirmationCode) {
     return undefined;
@@ -234,7 +225,7 @@ function parseAccountConfig(
   if (value.transport !== undefined && transport === undefined) {
     issues.push({
       path: `${path}.transport`,
-      message: "must be callback-api or long-poll",
+      message: "must be long-poll; callback-api is archived on the callback branch",
     });
   }
 
@@ -353,11 +344,8 @@ export function parseVkConfig(input: unknown): VkConfig {
   }
 
   if (config.defaultAccount) {
-    const defaultAccountIsBase =
-      config.defaultAccount === DEFAULT_VK_ACCOUNT_ID;
-    const defaultAccountExists = Boolean(
-      config.accounts?.[config.defaultAccount],
-    );
+    const defaultAccountIsBase = config.defaultAccount === DEFAULT_VK_ACCOUNT_ID;
+    const defaultAccountExists = Boolean(config.accounts?.[config.defaultAccount]);
     if (!defaultAccountIsBase && !defaultAccountExists) {
       issues.push({
         path: "channels.vk.defaultAccount",
@@ -366,11 +354,7 @@ export function parseVkConfig(input: unknown): VkConfig {
     }
   }
 
-  if (
-    !config.defaultAccount &&
-    !config.accounts &&
-    !hasBaseAccountConfig(config)
-  ) {
+  if (!config.defaultAccount && !config.accounts && !hasBaseAccountConfig(config)) {
     config.defaultAccount = DEFAULT_VK_ACCOUNT_ID;
   }
 

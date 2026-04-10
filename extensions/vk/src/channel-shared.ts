@@ -1,10 +1,6 @@
 import { createRestrictSendersChannelSecurity } from "openclaw/plugin-sdk/channel-policy";
 import type { ChannelPlugin } from "openclaw/plugin-sdk/core";
-import {
-  hasVkCredentials,
-  resolveVkAccount,
-  type ResolvedVkAccount,
-} from "./accounts.js";
+import { hasVkCredentials, resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
 import { vkConfigAdapter } from "./config-adapter.js";
 import { VkChannelConfigSchema } from "./config-schema.js";
 import type { OpenClawConfig } from "./types.js";
@@ -12,30 +8,29 @@ import type { OpenClawConfig } from "./types.js";
 export const vkChannelMeta = {
   id: "vk",
   label: "VK",
-  selectionLabel: "VK (Callback API)",
+  selectionLabel: "VK (Long Poll)",
   detailLabel: "VK Bot",
   docsPath: "/channels/vk",
   docsLabel: "vk",
-  blurb: "VK community bot for direct messages and group chats with buttons, media, and official transports.",
+  blurb:
+    "VK community bot for direct messages and group chats with buttons, media, and long-poll-first onboarding.",
   systemImage: "message",
 } as const;
 
-export const vkSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedVkAccount>(
-  {
-    channelKey: "vk",
-    resolveDmPolicy: (account) => account.config.dmPolicy,
-    resolveDmAllowFrom: (account) => account.config.allowFrom,
-    resolveGroupPolicy: (account) => account.config.groupPolicy,
-    surface: "VK group chats",
-    openScope: "any participant in configured VK chats",
-    groupPolicyPath: "channels.vk.groupPolicy",
-    groupAllowFromPath: "channels.vk.groupAllowFrom",
-    mentionGated: true,
-    policyPathSuffix: "dmPolicy",
-    approveHint: "openclaw pairing approve vk <id>",
-    normalizeDmEntry: (raw) => raw.replace(/^vk:(?:user:)?/i, ""),
-  },
-);
+export const vkSecurityAdapter = createRestrictSendersChannelSecurity<ResolvedVkAccount>({
+  channelKey: "vk",
+  resolveDmPolicy: (account) => account.config.dmPolicy,
+  resolveDmAllowFrom: (account) => account.config.allowFrom,
+  resolveGroupPolicy: (account) => account.config.groupPolicy,
+  surface: "VK group chats",
+  openScope: "any participant in configured VK chats",
+  groupPolicyPath: "channels.vk.groupPolicy",
+  groupAllowFromPath: "channels.vk.groupAllowFrom",
+  mentionGated: true,
+  policyPathSuffix: "dmPolicy",
+  approveHint: "openclaw pairing approve vk <id>",
+  normalizeDmEntry: (raw) => raw.replace(/^vk:(?:user:)?/i, ""),
+});
 
 export const vkChannelPluginCommon = {
   meta: {
@@ -55,8 +50,7 @@ export const vkChannelPluginCommon = {
   config: {
     ...vkConfigAdapter,
     hasConfiguredState: ({ cfg }) =>
-      listConfiguredVkAccounts(cfg).length > 0 ||
-      Boolean(process.env.VK_GROUP_TOKEN?.trim()),
+      listConfiguredVkAccounts(cfg).length > 0 || Boolean(process.env.VK_GROUP_TOKEN?.trim()),
     isConfigured: (account: ResolvedVkAccount) => hasVkCredentials(account),
     describeAccount: (account: ResolvedVkAccount) => ({
       accountId: account.accountId,
@@ -64,8 +58,7 @@ export const vkChannelPluginCommon = {
       enabled: account.enabled,
       configured: hasVkCredentials(account),
       tokenSource: account.tokenSource,
-      mode: account.config.transport,
-      webhookPath: account.config.callback.path,
+      mode: "long-poll",
     }),
   },
 } satisfies Pick<

@@ -21,21 +21,20 @@ vi.mock("openclaw/plugin-sdk/direct-dm", async (importOriginal) => {
 });
 
 vi.mock("openclaw/plugin-sdk/inbound-reply-dispatch", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")>();
+  const actual =
+    await importOriginal<typeof import("openclaw/plugin-sdk/inbound-reply-dispatch")>();
   return {
     ...actual,
     dispatchInboundReplyWithBase: dispatchInboundReplyWithBaseMock,
   };
 });
 
-import {
-  handleVkInboundMessage,
-} from "../../src/inbound.js";
+import { resolveVkAccount } from "../../src/accounts.js";
+import { handleVkInboundMessage } from "../../src/inbound.js";
 import {
   clearVkInteractiveMessageState,
   rememberVkInteractiveMessageId,
 } from "../../src/interactive-state.js";
-import { resolveVkAccount } from "../../src/accounts.js";
 import { clearVkRuntime, setVkRuntime } from "../../src/runtime.js";
 import type { OpenClawConfig } from "../../src/types.js";
 import { createVkAccessController } from "../../src/vk-core/inbound/access.js";
@@ -382,10 +381,84 @@ describe("vk inbound handling", () => {
       "VK uses buttons for command menus. Choose a command:",
     );
     const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
-    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(true);
+    expect(keyboard.one_time).toBe(false);
     expect(keyboard.buttons).toHaveLength(5);
     expect(keyboard.buttons[0][0].action.label).toBe("Menu");
     expect(keyboard.buttons[0][1].action.label).toBe("Help");
+    expect(keyboard.buttons[4][0].action.label).toBe("Close");
+  });
+
+  it("keeps the long-poll bare-slash command menu pinned as a persistent keyboard", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        requestedUrls.push(new URL(String(input)));
+        return new Response(
+          JSON.stringify({
+            response: 95011,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "long-poll",
+          accessToken: "replace-me-longpoll-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "long-poll",
+        eventType: "message_new",
+        dedupeKey: "event:slash-menu-longpoll-1",
+        messageId: "5051",
+        peerId: 42,
+        senderId: 42,
+        text: "/",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+      },
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).not.toHaveBeenCalled();
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe(
+      "VK uses buttons for command menus. Choose a command:",
+    );
+    const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
+    expect(keyboard.inline ?? false).toBe(false);
+    expect(keyboard.one_time).toBe(false);
+    expect(keyboard.buttons).toHaveLength(5);
+    expect(keyboard.buttons[0][0].action.type).toBe("text");
+    expect(keyboard.buttons[0][0].action.label).toBe("Menu");
     expect(keyboard.buttons[4][0].action.label).toBe("Close");
   });
 
@@ -453,7 +526,8 @@ describe("vk inbound handling", () => {
       "VK uses buttons for command menus. Matching commands:",
     );
     const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
-    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(true);
+    expect(keyboard.one_time).toBe(false);
     expect(keyboard.buttons).toHaveLength(2);
     expect(keyboard.buttons[0][0].action.label).toBe("Model");
     expect(keyboard.buttons[0][1].action.label).toBe("Models");
@@ -524,7 +598,8 @@ describe("vk inbound handling", () => {
       "VK uses buttons for command menus. Matching commands:",
     );
     const keyboard = JSON.parse(sendUrl?.searchParams.get("keyboard") ?? "{}");
-    expect(Object.hasOwn(keyboard, "one_time")).toBe(false);
+    expect(Object.hasOwn(keyboard, "one_time")).toBe(true);
+    expect(keyboard.one_time).toBe(false);
     expect(keyboard.buttons).toHaveLength(2);
     expect(keyboard.buttons[0][0].action.label).toBe("Status");
     expect(keyboard.buttons[0][1].action.label).toBe("Stop");

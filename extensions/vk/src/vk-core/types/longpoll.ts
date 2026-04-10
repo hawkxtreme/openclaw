@@ -1,3 +1,5 @@
+import type { VkConsentEvent } from "./access.js";
+import type { VkMessageEvent } from "./callback.js";
 import type { ResolvedVkAccount } from "./config.js";
 import type { VkFormatData } from "./format.js";
 
@@ -33,12 +35,7 @@ export type VkInboundMessage = {
   rawUpdate: unknown;
 };
 
-export type VkLongPollMonitorState =
-  | "idle"
-  | "starting"
-  | "running"
-  | "reconnecting"
-  | "stopped";
+export type VkLongPollMonitorState = "idle" | "starting" | "running" | "reconnecting" | "stopped";
 
 export type VkLongPollMonitorStatus = {
   state: VkLongPollMonitorState;
@@ -76,6 +73,8 @@ export type VkLongPollMonitorOptions = {
   reconnectDelayMs?: number;
   dedupeMaxEntries?: number;
   onMessage: (message: VkInboundMessage) => void | Promise<void>;
+  onConsent?: (event: VkConsentEvent) => void | Promise<void>;
+  onInteractiveEvent?: (event: VkMessageEvent) => void | Promise<void>;
   onStatusChange?: (status: VkLongPollMonitorStatus) => void;
   logger?: VkLongPollLogger;
   now?: () => number;

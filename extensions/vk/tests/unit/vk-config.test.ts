@@ -1,9 +1,7 @@
 import { mkdtempSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-
 import { describe, expect, it } from "vitest";
-
 import {
   createVkChannel,
   createVkRuntime,
@@ -26,12 +24,21 @@ describe("vk config", () => {
 
     expect(config).toMatchObject({
       groupId: 42,
-      transport: "callback-api",
+      transport: "long-poll",
       apiVersion: "5.199",
       callback: {
         path: "/plugins/vk/webhook/default",
       },
     });
+  });
+
+  it("rejects callback-api transport on the active long-poll branch", () => {
+    expect(() =>
+      parseVkConfig({
+        groupId: 42,
+        transport: "callback-api",
+      }),
+    ).toThrow(VkConfigError);
   });
 
   it("throws for invalid account and defaultAccount mismatch", () => {
@@ -74,10 +81,6 @@ describe("vk config", () => {
           requireMention: true,
         },
       },
-      callback: {
-        path: "/callback/root",
-        secret: "replace-me-root-secret",
-      },
       accounts: {
         support: {
           name: "Support",
@@ -89,9 +92,6 @@ describe("vk config", () => {
               requireMention: false,
               allowFrom: ["vk:300"],
             },
-          },
-          callback: {
-            path: "/callback/support",
           },
         },
       },
@@ -122,10 +122,6 @@ describe("vk config", () => {
             requireMention: false,
             allowFrom: ["vk:300"],
           },
-        },
-        callback: {
-          path: "/callback/support",
-          secret: "replace-me-root-secret",
         },
       },
     });
@@ -214,7 +210,7 @@ describe("vk config", () => {
 
     expect(createVkChannel(config)).toEqual({
       id: "vk",
-      transport: "callback-api",
+      transport: "long-poll",
       defaultAccountId: "support",
       apiVersion: "5.199",
     });

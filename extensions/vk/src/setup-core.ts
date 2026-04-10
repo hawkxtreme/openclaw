@@ -1,9 +1,5 @@
 import type { ChannelSetupAdapter } from "openclaw/plugin-sdk/setup";
-import {
-  DEFAULT_ACCOUNT_ID,
-  getVkConfig,
-  normalizeVkAccountId,
-} from "./accounts.js";
+import { DEFAULT_ACCOUNT_ID, getVkConfig, normalizeVkAccountId } from "./accounts.js";
 import type { OpenClawConfig } from "./types.js";
 
 export function patchVkAccountConfig(params: {
@@ -77,32 +73,24 @@ export const vkSetupAdapter: ChannelSetupAdapter = {
     if (input.accessToken?.trim() || input.token?.trim() || input.tokenFile?.trim()) {
       return null;
     }
-    return "VK requires accessToken, token, or --token-file (or --use-env).";
+    return "VK requires a community access token, token file, or --use-env.";
   },
   applyAccountConfig: ({ cfg, accountId, input }) => {
     const token = input.accessToken?.trim() || input.token?.trim();
-    const webhookPath = input.webhookPath?.trim();
     return patchVkAccountConfig({
       cfg: cfg as OpenClawConfig,
       accountId,
       enabled: true,
-      clearFields: input.useEnv ? ["accessToken", "tokenFile"] : undefined,
+      clearFields: input.useEnv ? ["accessToken", "tokenFile", "callback"] : ["callback"],
       patch: input.useEnv
         ? {}
         : {
+            transport: "long-poll",
             ...(input.tokenFile?.trim()
               ? { tokenFile: input.tokenFile.trim() }
               : token
                 ? { accessToken: token }
                 : {}),
-            ...(webhookPath
-              ? {
-                  callback: {
-                    ...getVkConfig(cfg as OpenClawConfig).callback,
-                    path: webhookPath.startsWith("/") ? webhookPath : `/${webhookPath}`,
-                  },
-                }
-              : {}),
           },
     });
   },

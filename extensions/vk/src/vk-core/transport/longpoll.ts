@@ -1,4 +1,6 @@
 import { getVkLongPollServer, pollVkLongPoll } from "../core/api.js";
+import { normalizeVkConsentUpdate } from "../inbound/consent.js";
+import { normalizeVkMessageEventUpdate } from "../inbound/message-event.js";
 import { normalizeVkMessageNewUpdate } from "../inbound/normalize.js";
 import type {
   VkLongPollMonitor,
@@ -30,9 +32,7 @@ function delay(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-export function createVkLongPollMonitor(
-  options: VkLongPollMonitorOptions,
-): VkLongPollMonitor {
+export function createVkLongPollMonitor(options: VkLongPollMonitorOptions): VkLongPollMonitor {
   const fetchImpl = options.fetchImpl ?? fetch;
   const now = options.now ?? Date.now;
   const reconnectDelayMs = Math.max(0, options.reconnectDelayMs ?? 5_000);
@@ -53,9 +53,7 @@ export function createVkLongPollMonitor(
     reconnectAttempts: 0,
   };
 
-  function patchStatus(
-    patch: Partial<VkLongPollMonitorStatus>,
-  ): VkLongPollMonitorStatus {
+  function patchStatus(patch: Partial<VkLongPollMonitorStatus>): VkLongPollMonitorStatus {
     status = {
       ...status,
       ...patch,
@@ -117,8 +115,7 @@ export function createVkLongPollMonitor(
     }
 
     if (!options.account.token) {
-      const message =
-        options.account.tokenError ?? "VK token is not configured";
+      const message = options.account.tokenError ?? "VK token is not configured";
       patchStatus({
         state: "stopped",
         active: false,
@@ -155,9 +152,7 @@ export function createVkLongPollMonitor(
         if (!server) {
           patchStatus({
             state:
-              status.reconnectAttempts > 0 || status.lastDisconnectAt
-                ? "reconnecting"
-                : "starting",
+              status.reconnectAttempts > 0 || status.lastDisconnectAt ? "reconnecting" : "starting",
             connected: false,
           });
           server = await connectServer(groupId);
@@ -229,25 +224,84 @@ export function createVkLongPollMonitor(
             update,
             now,
           });
-          if (!message) {
+          if (message) {
+            if (dedupe.has(message.dedupeKey)) {
+              patchStatus({
+                dedupedEvents: status.dedupedEvents + 1,
+              });
+              options.logger?.debug?.(
+                `[${options.account.accountId}] deduped VK long poll event ${message.dedupeKey}`,
+              );
+              continue;
+            }
+
+            dedupe.add(message.dedupeKey);
+            await options.onMessage(message);
+            patchStatus({
+              deliveredEvents: status.deliveredEvents + 1,
+              lastInboundAt: message.createdAt,
+            });
+
+            if (controller.signal.aborted) {
+              break;
+            }
             continue;
           }
 
-          if (dedupe.has(message.dedupeKey)) {
+          const consent = normalizeVkConsentUpdate({
+            accountId: options.account.accountId,
+            groupId,
+            update,
+            now,
+          });
+          if (consent) {
+            if (dedupe.has(consent.dedupeKey)) {
+              patchStatus({
+                dedupedEvents: status.dedupedEvents + 1,
+              });
+              options.logger?.debug?.(
+                `[${options.account.accountId}] deduped VK long poll event ${consent.dedupeKey}`,
+              );
+              continue;
+            }
+
+            dedupe.add(consent.dedupeKey);
+            await options.onConsent?.(consent);
+            patchStatus({
+              deliveredEvents: status.deliveredEvents + 1,
+            });
+
+            if (controller.signal.aborted) {
+              break;
+            }
+            continue;
+          }
+
+          const interactive = normalizeVkMessageEventUpdate({
+            accountId: options.account.accountId,
+            groupId,
+            update,
+            transport: "long-poll",
+            now,
+          });
+          if (!interactive) {
+            continue;
+          }
+
+          if (dedupe.has(interactive.dedupeKey)) {
             patchStatus({
               dedupedEvents: status.dedupedEvents + 1,
             });
             options.logger?.debug?.(
-              `[${options.account.accountId}] deduped VK long poll event ${message.dedupeKey}`,
+              `[${options.account.accountId}] deduped VK long poll event ${interactive.dedupeKey}`,
             );
             continue;
           }
 
-          dedupe.add(message.dedupeKey);
-          await options.onMessage(message);
+          dedupe.add(interactive.dedupeKey);
+          await options.onInteractiveEvent?.(interactive);
           patchStatus({
             deliveredEvents: status.deliveredEvents + 1,
-            lastInboundAt: message.createdAt,
           });
 
           if (controller.signal.aborted) {

@@ -70,6 +70,7 @@ export function normalizeVkMessageEventUpdate(params: {
   accountId: string;
   groupId: number;
   update: unknown;
+  transport?: VkMessageEvent["transport"];
   now?: () => number;
 }): VkMessageEvent | null {
   const envelope = asRecord(params.update) as VkMessageEventEnvelope | null;
@@ -96,14 +97,12 @@ export function normalizeVkMessageEventUpdate(params: {
 
   const eventId = toOptionalString(envelope.event_id);
   const { payload, rawPayload } = parsePayload(eventObject.payload);
-  const createdAtSeconds = toFiniteInteger(
-    eventObject.date ?? eventObject.update_time,
-  );
+  const createdAtSeconds = toFiniteInteger(eventObject.date ?? eventObject.update_time);
 
   return {
     accountId: params.accountId,
     groupId: params.groupId,
-    transport: "callback-api",
+    transport: params.transport ?? "callback-api",
     eventType: "message_event",
     eventId,
     dedupeKey: eventId
@@ -112,16 +111,10 @@ export function normalizeVkMessageEventUpdate(params: {
     callbackEventId,
     senderId,
     peerId,
-    conversationMessageId: toOptionalString(
-      eventObject.conversation_message_id,
-    ),
+    conversationMessageId: toOptionalString(eventObject.conversation_message_id),
     payload,
     rawPayload,
-    createdAt: createdAtSeconds
-      ? createdAtSeconds * 1000
-      : params.now
-        ? params.now()
-        : undefined,
+    createdAt: createdAtSeconds ? createdAtSeconds * 1000 : params.now ? params.now() : undefined,
     rawUpdate: params.update,
   };
 }

@@ -78,6 +78,7 @@ describe("vk gateway adapter", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",
@@ -149,6 +150,7 @@ describe("vk gateway adapter", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",
@@ -226,6 +228,7 @@ describe("vk gateway adapter", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",

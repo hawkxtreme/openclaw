@@ -1,10 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
-import { vkMessagingAdapter, vkOutboundAdapter, vkPlugin } from "../../api.js";
+import { resolveModelsCommandReply } from "../../../../src/auto-reply/reply/commands-models.js";
+import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 import { createTestRegistry } from "../../../../src/test-utils/channel-plugins.js";
-import { handleModelsCommand } from "../../../../src/auto-reply/reply/commands-models.js";
-import type { OpenClawConfig } from "../../../../src/config/config.js";
+import { vkMessagingAdapter, vkOutboundAdapter, vkPlugin } from "../../api.js";
 
 describe("vk plugin adapters", () => {
   beforeEach(() => {
@@ -52,9 +51,7 @@ describe("vk plugin adapters", () => {
 
   it("normalizes vk targets and resolves outbound session routes", () => {
     expect(vkMessagingAdapter.normalizeTarget?.("vk:user:42")).toBe("42");
-    expect(vkMessagingAdapter.normalizeTarget?.("conversation:2000000123")).toBe(
-      "2000000123",
-    );
+    expect(vkMessagingAdapter.normalizeTarget?.("conversation:2000000123")).toBe("2000000123");
 
     const route = vkMessagingAdapter.resolveOutboundSessionRoute?.({
       cfg: {
@@ -208,7 +205,7 @@ describe("vk plugin adapters", () => {
     expect(commandsData).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "Models", callback_data: "/models" },
@@ -234,7 +231,7 @@ describe("vk plugin adapters", () => {
     expect(providerData).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "anthropic (2)", callback_data: "/models anthropic" },
@@ -291,7 +288,7 @@ describe("vk plugin adapters", () => {
     expect(listData).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "GPT-5.4 ✓", callback_data: "/model openai/gpt-5.4" },
@@ -338,7 +335,7 @@ describe("vk plugin adapters", () => {
     expect(vkPlugin.commands?.buildModelBrowseChannelData?.()).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [{ text: "Browse providers", callback_data: "/models" }],
           [{ text: "Close", callback_data: "/vk-menu-close" }],
@@ -346,17 +343,19 @@ describe("vk plugin adapters", () => {
       },
     });
 
-    expect(vkPlugin.commands?.buildToolsGroupListChannelData?.({
-      groups: [
-        { id: "core", label: "Built-in tools", count: 20 },
-        { id: "plugin", label: "Connected tools", count: 2 },
-      ],
-      currentPage: 1,
-      totalPages: 1,
-    })).toEqual({
+    expect(
+      vkPlugin.commands?.buildToolsGroupListChannelData?.({
+        groups: [
+          { id: "core", label: "Built-in tools", count: 20 },
+          { id: "plugin", label: "Connected tools", count: 2 },
+        ],
+        currentPage: 1,
+        totalPages: 1,
+      }),
+    ).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "Built-in (20)", callback_data: "/tools core" },
@@ -367,19 +366,21 @@ describe("vk plugin adapters", () => {
       },
     });
 
-    expect(vkPlugin.commands?.buildToolsListChannelData?.({
-      groupId: "plugin",
-      groupLabel: "Connected tools",
-      tools: [
-        { id: "browser", label: "Browser" },
-        { id: "memory_search", label: "Memory Search" },
-      ],
-      currentPage: 1,
-      totalPages: 2,
-    })).toEqual({
+    expect(
+      vkPlugin.commands?.buildToolsListChannelData?.({
+        groupId: "plugin",
+        groupLabel: "Connected tools",
+        tools: [
+          { id: "browser", label: "Browser" },
+          { id: "memory_search", label: "Memory Search" },
+        ],
+        currentPage: 1,
+        totalPages: 2,
+      }),
+    ).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "Browser", callback_data: "/tools plugin browser" },
@@ -394,13 +395,15 @@ describe("vk plugin adapters", () => {
       },
     });
 
-    expect(vkPlugin.commands?.buildToolDetailsChannelData?.({
-      groupId: "plugin",
-      currentPage: 2,
-    })).toEqual({
+    expect(
+      vkPlugin.commands?.buildToolDetailsChannelData?.({
+        groupId: "plugin",
+        currentPage: 2,
+      }),
+    ).toEqual({
       vk: {
         inline: true,
-        oneTime: true,
+        oneTime: false,
         buttons: [
           [
             { text: "< Back", callback_data: "/tools plugin 2" },
@@ -427,31 +430,19 @@ describe("vk plugin adapters", () => {
       },
     } as OpenClawConfig;
 
-    const result = await handleModelsCommand(
-      {
-        cfg,
-        ctx: {
-          Provider: "vk",
-          Surface: "vk",
-          CommandSource: "text",
-        },
-        command: {
-          commandBodyNormalized: "/models 2",
-          isAuthorizedSender: true,
-          senderId: "owner",
-        },
-        sessionKey: "agent:main:main",
-        provider: "alpha",
-        model: "model-1",
-      } as never,
-      true,
-    );
+    const reply = await resolveModelsCommandReply({
+      cfg,
+      commandBodyNormalized: "/models 2",
+      surface: "vk",
+      currentModel: "alpha/model-1",
+    });
 
-    expect(result?.shouldContinue).toBe(false);
-    expect(result?.reply?.text).toBe("Select a provider (2/3):");
-    const buttons = (result?.reply?.channelData as {
-      vk?: { buttons?: Array<Array<{ text: string }>> };
-    })?.vk?.buttons;
+    expect(reply?.text).toBe("Select a provider (2/3):");
+    const buttons = (
+      reply?.channelData as {
+        vk?: { buttons?: Array<Array<{ text: string }>> };
+      }
+    )?.vk?.buttons;
     expect(buttons?.flat().some((button) => button.text.includes("p07"))).toBe(false);
     expect(buttons?.flat().some((button) => button.text.includes("p08"))).toBe(true);
     expect(buttons?.flat().some((button) => button.text === "< Prev")).toBe(true);
@@ -507,7 +498,7 @@ describe("vk plugin adapters", () => {
         if (url.pathname === "/method/messages.send") {
           const keyboard = JSON.parse(url.searchParams.get("keyboard") ?? "{}");
           expect(keyboard.inline ?? false).toBe(false);
-          expect(keyboard.one_time).toBe(true);
+          expect(keyboard.one_time).toBe(false);
           expect(keyboard.buttons[0][0].action.type).toBe("text");
           expect(keyboard.buttons[0][0].action.label).toBe("Browse providers");
         }

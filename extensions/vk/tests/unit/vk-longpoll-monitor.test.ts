@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-import {
-  createVkLongPollMonitor,
-  parseVkConfig,
-  resolveVkAccount,
-} from "../../api.js";
+import { createVkLongPollMonitor, parseVkConfig, resolveVkAccount } from "../../api.js";
 
 function createAccount(overrides?: {
   config?: unknown;
@@ -275,6 +270,132 @@ describe("vk long poll monitor", () => {
       connected: false,
       active: false,
       stopReason: "manual-stop",
+    });
+  });
+
+  it("delivers consent and interactive updates on the long-poll transport", async () => {
+    const account = createAccount();
+    const consentEvents: Array<{
+      eventType: string;
+      senderId: number;
+      consentState: string;
+    }> = [];
+    const interactiveEvents: Array<{
+      transport: string;
+      eventType: string;
+      peerId: number;
+      senderId: number;
+      callbackEventId: string;
+      payload: unknown;
+    }> = [];
+    let pollCalls = 0;
+
+    let monitor!: ReturnType<typeof createVkLongPollMonitor>;
+    monitor = createVkLongPollMonitor({
+      account,
+      waitSeconds: 1,
+      reconnectDelayMs: 0,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("groups.getLongPollServer")) {
+          return new Response(
+            JSON.stringify({
+              response: {
+                server: "https://lp.vk.test/events",
+                key: "events-key",
+                ts: "400",
+              },
+            }),
+          );
+        }
+
+        pollCalls += 1;
+        if (pollCalls === 1) {
+          return new Response(
+            JSON.stringify({
+              ts: "401",
+              updates: [
+                {
+                  type: "message_allow",
+                  group_id: 77,
+                  event_id: "evt-allow-1",
+                  object: {
+                    user_id: 42,
+                    date: 1_700_000_200,
+                  },
+                },
+                {
+                  type: "message_event",
+                  group_id: 77,
+                  event_id: "evt-event-1",
+                  object: {
+                    user_id: 42,
+                    peer_id: 42,
+                    event_id: "callback-event-1",
+                    conversation_message_id: 18,
+                    payload: JSON.stringify({ oc: "/commands" }),
+                    date: 1_700_000_201,
+                  },
+                },
+              ],
+            }),
+          );
+        }
+
+        monitor.stop("events-delivered");
+        return new Response(
+          JSON.stringify({
+            ts: "402",
+            updates: [],
+          }),
+        );
+      },
+      onMessage: () => {
+        throw new Error("message handler should not be called for consent-only event batch");
+      },
+      onConsent: (event) => {
+        consentEvents.push({
+          eventType: event.eventType,
+          senderId: event.senderId,
+          consentState: event.consentState,
+        });
+      },
+      onInteractiveEvent: (event) => {
+        interactiveEvents.push({
+          transport: event.transport,
+          eventType: event.eventType,
+          peerId: event.peerId,
+          senderId: event.senderId,
+          callbackEventId: event.callbackEventId,
+          payload: event.payload,
+        });
+      },
+    } as never);
+
+    await monitor.start();
+
+    expect(consentEvents).toEqual([
+      {
+        eventType: "message_allow",
+        senderId: 42,
+        consentState: "allowed",
+      },
+    ]);
+    expect(interactiveEvents).toEqual([
+      {
+        transport: "long-poll",
+        eventType: "message_event",
+        peerId: 42,
+        senderId: 42,
+        callbackEventId: "callback-event-1",
+        payload: { oc: "/commands" },
+      },
+    ]);
+    expect(monitor.getStatus()).toMatchObject({
+      state: "stopped",
+      receivedEvents: 2,
+      deliveredEvents: 2,
+      stopReason: "events-delivered",
     });
   });
 });

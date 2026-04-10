@@ -1,5 +1,5 @@
-import type { ResolvedVkAccount } from "./config.js";
 import type { VkConsentEvent } from "./access.js";
+import type { ResolvedVkAccount } from "./config.js";
 import type { VkInboundMessage } from "./longpoll.js";
 
 export type VkCallbackEnvelope = {
@@ -14,7 +14,7 @@ export type VkCallbackEnvelope = {
 export type VkMessageEvent = {
   accountId: string;
   groupId: number;
-  transport: "callback-api";
+  transport: "callback-api" | "long-poll";
   eventType: "message_event";
   eventId?: string;
   dedupeKey: string;

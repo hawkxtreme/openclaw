@@ -123,10 +123,7 @@ function truncateLabel(value: string, maxChars = MAX_MODEL_LABEL_CHARS): string 
 }
 
 function appendCloseRow(rows: VkReplyButton[][]): VkReplyButton[][] {
-  return [
-    ...rows,
-    [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],
-  ];
+  return [...rows, [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }]];
 }
 
 function shortenToolGroupLabel(label: string): string {
@@ -190,7 +187,7 @@ export function buildVkCommandsListChannelData(params: {
 
   return toChannelData(appendCloseRow(rows), {
     inline: true,
-    oneTime: true,
+    oneTime: false,
   });
 }
 
@@ -206,16 +203,10 @@ export function buildVkModelsProviderChannelData(params: {
   const totalPages = Math.max(currentPage, params.totalPages ?? currentPage);
   // Live VK callback keyboards reject middle provider pages with 11 buttons
   // (8 providers + Prev + Next + Close). Reserve room for navigation/close.
-  const reservedControlButtons =
-    (currentPage > 1 ? 1 : 0) +
-    (currentPage < totalPages ? 1 : 0) +
-    1;
+  const reservedControlButtons = (currentPage > 1 ? 1 : 0) + (currentPage < totalPages ? 1 : 0) + 1;
   const providerButtonLimit = Math.max(
     1,
-    Math.min(
-      PROVIDERS_PAGE_SIZE,
-      MAX_INLINE_CALLBACK_BUTTONS - reservedControlButtons,
-    ),
+    Math.min(PROVIDERS_PAGE_SIZE, MAX_INLINE_CALLBACK_BUTTONS - reservedControlButtons),
   );
   const rows = chunkButtons(
     params.providers.slice(0, providerButtonLimit).map((provider) => ({
@@ -244,7 +235,7 @@ export function buildVkModelsProviderChannelData(params: {
 
   return toChannelData(appendCloseRow(rows), {
     inline: true,
-    oneTime: true,
+    oneTime: false,
   });
 }
 
@@ -306,7 +297,7 @@ export function buildVkModelsListChannelData(params: {
 
   return toChannelData(rows, {
     inline: true,
-    oneTime: true,
+    oneTime: false,
   });
 }
 
@@ -314,7 +305,7 @@ export function buildVkModelBrowseChannelData(): ReplyPayload["channelData"] {
   return {
     vk: {
       inline: true,
-      oneTime: true,
+      oneTime: false,
       buttons: [
         [{ text: "Browse providers", callback_data: "/models" }],
         [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],
@@ -361,7 +352,7 @@ export function buildVkToolsGroupListChannelData(params: {
 
   return toChannelData(appendCloseRow(rows), {
     inline: true,
-    oneTime: true,
+    oneTime: false,
   });
 }
 
@@ -416,7 +407,7 @@ export function buildVkToolsListChannelData(params: {
 
   return toChannelData(rows, {
     inline: true,
-    oneTime: true,
+    oneTime: false,
   });
 }
 
@@ -442,7 +433,7 @@ export function buildVkToolDetailsChannelData(params: {
     ],
     {
       inline: true,
-      oneTime: true,
+      oneTime: false,
     },
   );
 }
@@ -466,9 +457,7 @@ export function resolveVkSlashCommandSuggestionReply(
   const matches =
     normalized === "/" || normalized === "/commands"
       ? VK_PRIMARY_COMMAND_SUGGESTIONS
-      : VK_COMMAND_SUGGESTIONS.filter((entry) =>
-          entry.command.startsWith(normalized),
-        );
+      : VK_COMMAND_SUGGESTIONS.filter((entry) => entry.command.startsWith(normalized));
   if (matches.length === 0) {
     return null;
   }
@@ -492,7 +481,7 @@ export function resolveVkSlashCommandSuggestionReply(
     ),
     {
       inline: true,
-      oneTime: true,
+      oneTime: false,
     },
   );
   if (!channelData) {

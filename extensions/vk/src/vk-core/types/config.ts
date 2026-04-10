@@ -1,6 +1,6 @@
 export const DEFAULT_VK_ACCOUNT_ID = "default";
 export const DEFAULT_VK_API_VERSION = "5.199";
-export const DEFAULT_VK_TRANSPORT = "callback-api";
+export const DEFAULT_VK_TRANSPORT = "long-poll";
 
 export type VkTransport = "callback-api" | "long-poll";
 export type VkDmPolicy = "pairing" | "allowlist" | "open" | "disabled";

@@ -23,11 +23,11 @@
     "channel": {
       "id": "vk",
       "label": "VK",
-      "selectionLabel": "VK (Callback API)",
+      "selectionLabel": "VK (Long Poll)",
       "detailLabel": "VK Bot",
       "docsPath": "/channels/vk",
       "docsLabel": "vk",
-      "blurb": "VK community bot for direct messages and group chats with buttons, media, and official transports.",
+      "blurb": "VK community bot for direct messages and group chats with buttons, media, and long-poll-first onboarding.",
       "systemImage": "message",
       "order": 76,
       "quickstartAllowFrom": true,

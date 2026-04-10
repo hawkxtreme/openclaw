@@ -1,7 +1,7 @@
 import { buildChannelConfigSchema } from "openclaw/plugin-sdk/channel-config-schema";
 import { z } from "openclaw/plugin-sdk/zod";
 
-const VkTransportSchema = z.enum(["callback-api", "long-poll"]);
+const VkTransportSchema = z.literal("long-poll");
 const VkDmPolicySchema = z.enum(["open", "allowlist", "pairing", "disabled"]);
 const VkGroupPolicySchema = z.enum(["open", "allowlist", "disabled"]);
 
@@ -27,8 +27,9 @@ const VkBaseConfigSchema = z.object({
   groupId: z.number().int().positive().optional(),
   accessToken: z.string().optional(),
   tokenFile: z.string().optional(),
-  transport: VkTransportSchema.optional().default("callback-api"),
+  transport: VkTransportSchema.optional().default("long-poll"),
   apiVersion: z.string().optional(),
+  // Compatibility-only input. Active delivery uses long poll only.
   callback: VkCallbackSchema.optional(),
   dmPolicy: VkDmPolicySchema.optional().default("pairing"),
   allowFrom: z.array(z.union([z.string(), z.number()])).optional(),

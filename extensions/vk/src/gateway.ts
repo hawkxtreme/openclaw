@@ -6,12 +6,14 @@ import {
   readWebhookBodyOrReject,
   registerPluginHttpRoute,
 } from "openclaw/plugin-sdk/webhook-ingress";
-import { getVkConfig, listVkAccountIds, resolveVkAccount, type ResolvedVkAccount } from "./accounts.js";
-import { handleVkInboundMessage } from "./inbound.js";
 import {
-  resolveLatestVkInteractiveMenuId,
-  retireVkInteractiveMenu,
-} from "./interactive-menu.js";
+  getVkConfig,
+  listVkAccountIds,
+  resolveVkAccount,
+  type ResolvedVkAccount,
+} from "./accounts.js";
+import { handleVkInboundMessage } from "./inbound.js";
+import { resolveLatestVkInteractiveMenuId, retireVkInteractiveMenu } from "./interactive-menu.js";
 import {
   isVkInteractiveMessageCurrent,
   rememberVkInteractiveMessageId,
@@ -19,16 +21,17 @@ import {
 } from "./interactive-state.js";
 import { resolveVkCommandFromPayload } from "./keyboard.js";
 import type { VkPlugin } from "./types.js";
+import type { OpenClawConfig } from "./types.js";
 import {
   createVkAccessController,
   createVkCallbackHandler,
   createVkLongPollMonitor,
+  sendVkMessageEventAnswer,
   type VkAccessController,
   type VkInteractiveEventAnswer,
   type VkLongPollMonitorStatus,
   type VkMessageEvent,
 } from "./vk-core/index.js";
-import type { OpenClawConfig } from "./types.js";
 
 const CHANNEL_ID = "vk";
 const DEFAULT_CALLBACK_PATH_PREFIX = "/vk/webhook";
@@ -105,7 +108,7 @@ function buildSyntheticMessageFromInteractiveEvent(event: VkMessageEvent) {
   return {
     accountId: event.accountId,
     groupId: event.groupId,
-    transport: "callback-api" as const,
+    transport: event.transport,
     eventType: "message_new" as const,
     eventId: event.eventId,
     dedupeKey: event.dedupeKey,
@@ -169,6 +172,92 @@ async function ensureVkInteractiveMenuState(params: {
     peerId: params.peerId,
     conversationMessageId: latestConversationMessageId,
   });
+}
+
+function createVkInteractiveEventHandler(params: {
+  cfg: OpenClawConfig;
+  account: ResolvedVkAccount;
+  accessController: VkAccessController;
+  log?: VkGatewayLog;
+  statusSink: ReturnType<typeof createAccountStatusSink>;
+}) {
+  return async (event: VkMessageEvent): Promise<VkInteractiveEventAnswer | void> => {
+    params.statusSink({
+      lastEventAt: Date.now(),
+    });
+
+    await ensureVkInteractiveMenuState({
+      account: params.account,
+      peerId: String(event.peerId),
+    });
+
+    const syntheticMessage = buildSyntheticMessageFromInteractiveEvent(event);
+    if (!syntheticMessage) {
+      return undefined;
+    }
+    if (
+      !isVkInteractiveMessageCurrent({
+        accountId: params.account.accountId,
+        peerId: String(event.peerId),
+        conversationMessageId: event.conversationMessageId,
+      })
+    ) {
+      void retireVkInteractiveMenu({
+        account: params.account,
+        peerId: event.peerId,
+        conversationMessageId: event.conversationMessageId,
+        log: params.log,
+      });
+      return buildStaleInteractiveEventAnswer();
+    }
+
+    void Promise.resolve(
+      handleVkInboundMessage({
+        cfg: params.cfg,
+        account: params.account,
+        message: syntheticMessage,
+        accessController: params.accessController,
+        log: params.log,
+        statusSink: params.statusSink,
+      }),
+    ).catch((error) => {
+      const rendered = String(error);
+      params.statusSink({
+        lastError: rendered,
+      });
+      params.log?.error?.(
+        `[${params.account.accountId}] VK interactive command failed: ${rendered}`,
+      );
+    });
+
+    return buildInteractiveEventAnswer(syntheticMessage.text);
+  };
+}
+
+async function sendVkInteractiveEventAnswerSafe(params: {
+  account: ResolvedVkAccount;
+  event: VkMessageEvent;
+  answer: VkInteractiveEventAnswer | void;
+  log?: VkGatewayLog;
+}): Promise<void> {
+  if (params.answer?.eventData === undefined) {
+    return;
+  }
+
+  try {
+    await sendVkMessageEventAnswer({
+      token: params.account.token,
+      eventId: params.event.callbackEventId,
+      userId: params.event.senderId,
+      peerId: params.event.peerId,
+      eventData: params.answer.eventData,
+      apiVersion: params.account.config.apiVersion,
+    });
+  } catch (error) {
+    params.log?.warn?.(
+      `[${params.account.accountId}] VK interactive answer failed: ${String(error)}`,
+    );
+  }
 }
 
 function patchLongPollStatus(
@@ -276,7 +365,9 @@ export function createVkCallbackRouteHandler(
       options.statusSink({
         lastError: rendered,
       });
-      options.log?.error?.(`[${options.account.accountId}] VK callback handler failed: ${rendered}`);
+      options.log?.error?.(
+        `[${options.account.accountId}] VK callback handler failed: ${rendered}`,
+      );
       if (!res.headersSent) {
         res.statusCode = 500;
         res.setHeader("Content-Type", "text/plain; charset=utf-8");
@@ -311,7 +402,7 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
     if (!account.token.trim() || !account.config.groupId) {
       const errorMessage = account.token.trim()
         ? "VK account is missing groupId"
-        : account.tokenError ?? "VK account is missing access token";
+        : (account.tokenError ?? "VK account is missing access token");
       statusSink({
         running: false,
         connected: false,
@@ -336,6 +427,13 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
       }
 
       const accessController = createVkAccessController();
+      const handleInteractiveEvent = createVkInteractiveEventHandler({
+        cfg: ctx.cfg as OpenClawConfig,
+        account,
+        accessController,
+        log: ctx.log,
+        statusSink,
+      });
       const path = resolveVkCallbackPath(account);
       const routeHandler = createVkCallbackRouteHandler({
         cfg: ctx.cfg as OpenClawConfig,
@@ -343,57 +441,7 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
         accessController,
         log: ctx.log,
         statusSink,
-        onInteractiveEvent: (event) => {
-          return Promise.resolve(
-            (async () => {
-              await ensureVkInteractiveMenuState({
-                account,
-                peerId: String(event.peerId),
-              });
-
-              const syntheticMessage = buildSyntheticMessageFromInteractiveEvent(event);
-              if (!syntheticMessage) {
-                return undefined;
-              }
-              if (
-                !isVkInteractiveMessageCurrent({
-                  accountId: account.accountId,
-                  peerId: String(event.peerId),
-                  conversationMessageId: event.conversationMessageId,
-                })
-              ) {
-                void retireVkInteractiveMenu({
-                  account,
-                  peerId: event.peerId,
-                  conversationMessageId: event.conversationMessageId,
-                  log: ctx.log,
-                });
-                return buildStaleInteractiveEventAnswer();
-              }
-
-              void Promise.resolve(
-                handleVkInboundMessage({
-                  cfg: ctx.cfg as OpenClawConfig,
-                  account,
-                  message: syntheticMessage,
-                  accessController,
-                  log: ctx.log,
-                  statusSink,
-                }),
-              ).catch((error) => {
-                const rendered = String(error);
-                statusSink({
-                  lastError: rendered,
-                });
-                ctx.log?.error?.(
-                  `[${ctx.accountId}] VK interactive command failed: ${rendered}`,
-                );
-              });
-
-              return buildInteractiveEventAnswer(syntheticMessage.text);
-            })(),
-          );
-        },
+        onInteractiveEvent: handleInteractiveEvent,
       });
       const unregister = registerPluginHttpRoute({
         path,
@@ -448,6 +496,13 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
     }
 
     const accessController = createVkAccessController();
+    const handleInteractiveEvent = createVkInteractiveEventHandler({
+      cfg: ctx.cfg as OpenClawConfig,
+      account,
+      accessController,
+      log: ctx.log,
+      statusSink,
+    });
     const monitor = createVkLongPollMonitor({
       account,
       abortSignal: ctx.abortSignal,
@@ -457,6 +512,21 @@ export const vkGatewayAdapter: NonNullable<VkPlugin["gateway"]> = {
         error: ctx.log?.error,
       },
       onStatusChange: (status) => patchLongPollStatus(statusSink, status),
+      onConsent: async (event) => {
+        accessController.recordConsent(event);
+        statusSink({
+          lastEventAt: Date.now(),
+        });
+      },
+      onInteractiveEvent: async (event) => {
+        const answer = await handleInteractiveEvent(event);
+        await sendVkInteractiveEventAnswerSafe({
+          account,
+          event,
+          answer,
+          log: ctx.log,
+        });
+      },
       onMessage: async (message) => {
         try {
           await handleVkInboundMessage({

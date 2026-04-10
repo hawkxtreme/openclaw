@@ -42,83 +42,85 @@ vi.mock("../../src/vk-core/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../src/vk-core/index.js")>();
   return {
     ...actual,
-    createVkCallbackHandler: vi.fn((options: {
-      onInteractiveEvent?: (event: {
-        accountId: string;
-        groupId: number;
-        transport: "callback-api";
-        eventType: "message_event";
-        eventId?: string;
-        dedupeKey: string;
-        callbackEventId: string;
-        senderId: number;
-        peerId: number;
-        conversationMessageId?: string;
-        payload?: unknown;
-        rawUpdate: unknown;
-      }) => unknown | Promise<unknown>;
-    }) => {
-      return async (request: { body?: string | unknown }) => {
-        const envelope =
-          typeof request.body === "string"
-            ? (JSON.parse(request.body) as {
-                type?: string;
-                object?: {
-                  peer_id?: number;
-                  user_id?: number;
-                  event_id?: string;
-                  conversation_message_id?: number;
-                  payload?: string;
-                };
-              })
-            : (request.body as {
-                type?: string;
-                object?: {
-                  peer_id?: number;
-                  user_id?: number;
-                  event_id?: string;
-                  conversation_message_id?: number;
-                  payload?: string;
-                };
-              });
+    createVkCallbackHandler: vi.fn(
+      (options: {
+        onInteractiveEvent?: (event: {
+          accountId: string;
+          groupId: number;
+          transport: "callback-api";
+          eventType: "message_event";
+          eventId?: string;
+          dedupeKey: string;
+          callbackEventId: string;
+          senderId: number;
+          peerId: number;
+          conversationMessageId?: string;
+          payload?: unknown;
+          rawUpdate: unknown;
+        }) => unknown | Promise<unknown>;
+      }) => {
+        return async (request: { body?: string | unknown }) => {
+          const envelope =
+            typeof request.body === "string"
+              ? (JSON.parse(request.body) as {
+                  type?: string;
+                  object?: {
+                    peer_id?: number;
+                    user_id?: number;
+                    event_id?: string;
+                    conversation_message_id?: number;
+                    payload?: string;
+                  };
+                })
+              : (request.body as {
+                  type?: string;
+                  object?: {
+                    peer_id?: number;
+                    user_id?: number;
+                    event_id?: string;
+                    conversation_message_id?: number;
+                    payload?: string;
+                  };
+                });
 
-        if (envelope?.type === "message_event") {
-          const payload = envelope.object?.payload
-            ? JSON.parse(envelope.object.payload)
-            : undefined;
-          const answer = await options.onInteractiveEvent?.({
-            accountId: "default",
-            groupId: 77,
-            transport: "callback-api",
-            eventType: "message_event",
-            eventId: "evt-interactive-1",
-            dedupeKey: "event:evt-interactive-1",
-            callbackEventId: envelope.object?.event_id ?? "callback-event-1",
-            senderId: envelope.object?.user_id ?? 42,
-            peerId: envelope.object?.peer_id ?? -237442417,
-            conversationMessageId: String(envelope.object?.conversation_message_id ?? 72),
-            payload,
-            rawUpdate: envelope,
-          });
-          interactiveEventAnswerMock(answer);
+          if (envelope?.type === "message_event") {
+            const payload = envelope.object?.payload
+              ? JSON.parse(envelope.object.payload)
+              : undefined;
+            const answer = await options.onInteractiveEvent?.({
+              accountId: "default",
+              groupId: 77,
+              transport: "callback-api",
+              eventType: "message_event",
+              eventId: "evt-interactive-1",
+              dedupeKey: "event:evt-interactive-1",
+              callbackEventId: envelope.object?.event_id ?? "callback-event-1",
+              senderId: envelope.object?.user_id ?? 42,
+              peerId: envelope.object?.peer_id ?? -237442417,
+              conversationMessageId: String(envelope.object?.conversation_message_id ?? 72),
+              payload,
+              rawUpdate: envelope,
+            });
+            interactiveEventAnswerMock(answer);
+            return {
+              statusCode: 200,
+              body: "ok",
+              eventType: "message_event",
+              accountId: "default",
+              duplicate: false,
+            };
+          }
+
           return {
             statusCode: 200,
             body: "ok",
-            eventType: "message_event",
+            eventType: "rejected",
             accountId: "default",
             duplicate: false,
           };
-        }
-
-        return {
-          statusCode: 200,
-          body: "ok",
-          eventType: "rejected",
-          accountId: "default",
-          duplicate: false,
         };
-      };
-    }),
+      },
+    ),
   };
 });
 
@@ -184,6 +186,7 @@ describe("vk gateway interactive callbacks", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",
@@ -275,6 +278,7 @@ describe("vk gateway interactive callbacks", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",
@@ -364,6 +368,7 @@ describe("vk gateway interactive callbacks", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",
@@ -445,6 +450,7 @@ describe("vk gateway interactive callbacks", () => {
       channels: {
         vk: {
           groupId: 77,
+          transport: "callback-api",
           accessToken: "replace-me-callback-token",
           callback: {
             path: "/plugins/vk/webhook/default",

@@ -103,11 +103,12 @@ function toVkButtons(buttons: readonly InteractiveReplyButton[]): VkReplyButton[
   });
 }
 
-function pushButtonRows(
-  rows: VkReplyButton[][],
-  buttons: readonly VkReplyButton[],
-): void {
-  for (let index = 0; index < buttons.length && rows.length < MAX_KEYBOARD_ROWS; index += MAX_BUTTONS_PER_ROW) {
+function pushButtonRows(rows: VkReplyButton[][], buttons: readonly VkReplyButton[]): void {
+  for (
+    let index = 0;
+    index < buttons.length && rows.length < MAX_KEYBOARD_ROWS;
+    index += MAX_BUTTONS_PER_ROW
+  ) {
     const row = buttons.slice(index, index + MAX_BUTTONS_PER_ROW);
     if (row.length > 0) {
       rows.push(row);
@@ -171,7 +172,9 @@ export function resolveVkKeyboardSpecFromPayload(payload: unknown): VkKeyboardSp
 
   const record = payload as Record<string, unknown>;
   const channelData =
-    record.channelData && typeof record.channelData === "object" && !Array.isArray(record.channelData)
+    record.channelData &&
+    typeof record.channelData === "object" &&
+    !Array.isArray(record.channelData)
       ? (record.channelData as Record<string, unknown>)
       : undefined;
   const vkData =
@@ -179,7 +182,8 @@ export function resolveVkKeyboardSpecFromPayload(payload: unknown): VkKeyboardSp
       ? (channelData.vk as Record<string, unknown>)
       : undefined;
 
-  const buttons = normalizeVkButtons(vkData?.buttons) ?? buildVkButtonsFromInteractive(record.interactive);
+  const buttons =
+    normalizeVkButtons(vkData?.buttons) ?? buildVkButtonsFromInteractive(record.interactive);
   if (!buttons) {
     return undefined;
   }
@@ -203,7 +207,7 @@ function toVkColor(style?: VkButtonStyle): "primary" | "secondary" | "positive" 
 
 export function buildVkKeyboard(
   spec?: VkKeyboardSpec,
-  transport: "callback-api" | "long-poll" = "callback-api",
+  transport: "callback-api" | "long-poll" = "long-poll",
 ): string | undefined {
   if (!spec?.buttons || spec.buttons.length === 0) {
     return undefined;
@@ -214,24 +218,22 @@ export function buildVkKeyboard(
   const rows = spec.buttons
     .slice(0, MAX_KEYBOARD_ROWS)
     .map((row) =>
-      row
-        .slice(0, MAX_BUTTONS_PER_ROW)
-        .flatMap((button) => {
-          const payload = serializeCommandPayload(button.callback_data);
-          if (!payload) {
-            return [];
-          }
-          return [
-            {
-              action: {
-                type: useInlineCallback ? ("callback" as const) : ("text" as const),
-                label: truncateLabel(button.text),
-                payload,
-              },
-              color: toVkColor(button.style),
+      row.slice(0, MAX_BUTTONS_PER_ROW).flatMap((button) => {
+        const payload = serializeCommandPayload(button.callback_data);
+        if (!payload) {
+          return [];
+        }
+        return [
+          {
+            action: {
+              type: useInlineCallback ? ("callback" as const) : ("text" as const),
+              label: truncateLabel(button.text),
+              payload,
             },
-          ];
-        }),
+            color: toVkColor(button.style),
+          },
+        ];
+      }),
     )
     .filter((row) => row.length > 0);
 

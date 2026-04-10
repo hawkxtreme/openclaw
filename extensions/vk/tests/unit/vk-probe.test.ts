@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-
-import {
-  parseVkConfig,
-  probeVkAccount,
-  resolveVkAccount,
-} from "../../api.js";
+import { parseVkConfig, probeVkAccount, resolveVkAccount } from "../../api.js";
 
 function createAccount(overrides?: {
   config?: unknown;
@@ -24,12 +19,29 @@ function createAccount(overrides?: {
 }
 
 describe("vk probe", () => {
-  it("returns success for direct array response", async () => {
+  it("returns success for a long-poll account with required events enabled", async () => {
     const account = createAccount();
     const result = await probeVkAccount({
       account,
-      fetchImpl: async () =>
-        new Response(
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("groups.getLongPollSettings")) {
+          return new Response(
+            JSON.stringify({
+              response: {
+                is_enabled: true,
+                events: {
+                  message_new: 1,
+                  message_allow: 1,
+                  message_deny: 1,
+                  message_event: 1,
+                },
+              },
+            }),
+          );
+        }
+
+        return new Response(
           JSON.stringify({
             response: [
               {
@@ -39,7 +51,8 @@ describe("vk probe", () => {
               },
             ],
           }),
-        ),
+        );
+      },
     });
 
     expect(result).toEqual({
@@ -55,11 +68,27 @@ describe("vk probe", () => {
   });
 
   it("accepts nested groups response shape", async () => {
-    const account = createAccount();
     const result = await probeVkAccount({
-      account,
-      fetchImpl: async () =>
-        new Response(
+      account: createAccount(),
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("groups.getLongPollSettings")) {
+          return new Response(
+            JSON.stringify({
+              response: {
+                is_enabled: true,
+                events: {
+                  message_new: 1,
+                  message_allow: 1,
+                  message_deny: 1,
+                  message_event: 1,
+                },
+              },
+            }),
+          );
+        }
+
+        return new Response(
           JSON.stringify({
             response: {
               groups: [
@@ -71,7 +100,8 @@ describe("vk probe", () => {
               ],
             },
           }),
-        ),
+        );
+      },
     });
 
     expect(result.ok).toBe(true);
@@ -138,6 +168,95 @@ describe("vk probe", () => {
       accountId: "default",
       tokenSource: "config",
       error: "VK probe timed out after 20ms",
+    });
+  });
+
+  it("fails when Bots Long Poll is disabled for a long-poll account", async () => {
+    const account = createAccount();
+    const result = await probeVkAccount({
+      account,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("groups.getLongPollSettings")) {
+          return new Response(
+            JSON.stringify({
+              response: {
+                is_enabled: false,
+                events: {
+                  message_new: 0,
+                  message_allow: 0,
+                  message_deny: 0,
+                  message_event: 0,
+                },
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: [
+              {
+                id: 77,
+                name: "VK Bot",
+                screen_name: "vk-bot",
+              },
+            ],
+          }),
+        );
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      accountId: "default",
+      tokenSource: "config",
+      error:
+        "VK Bots Long Poll is disabled. Enable Bots Long Poll API and the required events in VK community settings.",
+    });
+  });
+
+  it("fails when required Long Poll events are missing", async () => {
+    const account = createAccount();
+    const result = await probeVkAccount({
+      account,
+      fetchImpl: async (input) => {
+        const url = String(input);
+        if (url.includes("groups.getLongPollSettings")) {
+          return new Response(
+            JSON.stringify({
+              response: {
+                is_enabled: true,
+                events: {
+                  message_new: 1,
+                  message_allow: 0,
+                  message_deny: 1,
+                  message_event: 0,
+                },
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: [
+              {
+                id: 77,
+                name: "VK Bot",
+                screen_name: "vk-bot",
+              },
+            ],
+          }),
+        );
+      },
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      accountId: "default",
+      tokenSource: "config",
+      error: "VK Bots Long Poll is missing required events: message_allow, message_event.",
     });
   });
 });
