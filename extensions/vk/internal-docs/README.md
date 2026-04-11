@@ -8,6 +8,8 @@ Contents:
 - `long-poll-research.md`: official VK Long Poll API notes, constraints, and
   product implications.
 - `competitive-analysis.md`: current market snapshot and competitor takeaways.
+- `2026-04-11-development-acceleration-research.md`: focused findings on how
+  to reduce cycle time, token burn, and UX complexity for the VK product line.
 - `sdd-long-poll-first.md`: design and execution plan for the long-poll-first
   product line.
 - `sdd-fast-ux.md`: design and execution plan for speed, onboarding, and

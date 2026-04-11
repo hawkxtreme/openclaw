@@ -101,7 +101,7 @@ function chunkButtons(buttons: readonly VkReplyButton[], size: number): VkReplyB
 
 function toChannelData(
   buttons: VkReplyButtons,
-  options: { inline?: boolean; oneTime?: boolean } = {},
+  options: { inline?: boolean; oneTime?: boolean; longPollInlineCallback?: boolean } = {},
 ): ReplyPayload["channelData"] | null {
   if (buttons.length === 0) {
     return null;
@@ -111,6 +111,7 @@ function toChannelData(
     buttons,
     ...(options.inline ? { inline: true } : {}),
     ...(options.oneTime !== undefined ? { oneTime: options.oneTime } : {}),
+    ...(options.longPollInlineCallback === true ? { longPollInlineCallback: true } : {}),
   };
 
   return { vk: spec };
@@ -271,6 +272,7 @@ export function buildVkModelsProviderChannelData(params: {
   return toChannelData(appendBackAndCloseRow(rows, "/commands"), {
     inline: true,
     oneTime: false,
+    longPollInlineCallback: true,
   });
 }
 
@@ -333,6 +335,7 @@ export function buildVkModelsListChannelData(params: {
   return toChannelData(rows, {
     inline: true,
     oneTime: false,
+    longPollInlineCallback: true,
   });
 }
 
@@ -341,6 +344,7 @@ export function buildVkModelBrowseChannelData(): ReplyPayload["channelData"] {
     vk: {
       inline: true,
       oneTime: false,
+      longPollInlineCallback: true,
       buttons: [
         [{ text: "Browse providers", callback_data: "/models" }],
         [{ text: "Close", callback_data: VK_CLOSE_MENU_COMMAND }],

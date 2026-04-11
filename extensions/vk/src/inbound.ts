@@ -11,7 +11,12 @@ import {
   type VkMenuBehavior,
   VK_CLOSE_MENU_COMMAND,
 } from "./command-ui.js";
-import { resolveRememberedVkInteractiveMessageId } from "./interactive-state.js";
+import { resolveLatestVkInteractiveMenuId } from "./interactive-menu.js";
+import {
+  rememberVkInteractiveMessageId,
+  resolveRememberedVkInteractiveMessageId,
+} from "./interactive-state.js";
+import { resolveVkCommandFromPayload } from "./keyboard.js";
 import { sendVkResolvedOutboundPayload } from "./outbound.js";
 import { resolveVkInboundEditConversationMessageId } from "./reply-to.js";
 import { getVkRuntime } from "./runtime.js";
@@ -37,6 +42,32 @@ type VkInboundStatusSink = (
     >
   >,
 ) => void;
+
+function resolveVkFlowDebugChannelData(payload: unknown): Record<string, unknown> | undefined {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    return undefined;
+  }
+
+  const record = payload as Record<string, unknown>;
+  const channelData =
+    record.channelData &&
+    typeof record.channelData === "object" &&
+    !Array.isArray(record.channelData)
+      ? (record.channelData as Record<string, unknown>)
+      : undefined;
+  const vk =
+    channelData?.vk && typeof channelData.vk === "object" && !Array.isArray(channelData.vk)
+      ? (channelData.vk as Record<string, unknown>)
+      : undefined;
+  return vk;
+}
+
+function emitVkFlowDebug(event: string, data: Record<string, unknown>): void {
+  if (process.env.OPENCLAW_VK_DEBUG_FLOW !== "1") {
+    return;
+  }
+  console.warn(`[vk-flow] ${JSON.stringify({ event, ...data })}`);
+}
 
 function resolveVkCommandReplyMenuBehavior(params: {
   account: ResolvedVkAccount;
@@ -196,6 +227,19 @@ async function deliverVkReply(params: {
   payload: unknown;
   statusSink?: VkInboundStatusSink;
 }) {
+  const payloadText =
+    params.payload && typeof params.payload === "object" && !Array.isArray(params.payload)
+      ? ((params.payload as Record<string, unknown>).text as string | undefined)
+      : undefined;
+  emitVkFlowDebug("deliver", {
+    accountId: params.accountId,
+    to: params.to,
+    replyToId: params.replyToId,
+    editConversationMessageId: params.editConversationMessageId,
+    payloadText: payloadText?.slice(0, 120),
+    channelDataVk: resolveVkFlowDebugChannelData(params.payload),
+  });
+
   await sendVkResolvedOutboundPayload({
     cfg: params.cfg,
     to: params.to,
@@ -206,6 +250,41 @@ async function deliverVkReply(params: {
   });
 
   params.statusSink?.({ lastOutboundAt: Date.now() });
+}
+
+async function resolveVkLongPollPayloadEditConversationMessageId(params: {
+  account: ResolvedVkAccount;
+  message: VkInboundMessage;
+  payloadCommand?: string;
+  rememberedInteractiveMessageId?: string;
+  log?: VkInboundLog;
+}): Promise<string | undefined> {
+  if (params.account.config.transport !== "long-poll" || !params.payloadCommand?.startsWith("/")) {
+    return undefined;
+  }
+
+  // Long-poll button clicks arrive as fresh user messages, so the inbound
+  // cmid belongs to the click itself. Resolve the newest interactive menu from
+  // VK history and only fall back to the remembered in-process id.
+  try {
+    const latestInteractiveMessageId = await resolveLatestVkInteractiveMenuId({
+      account: params.account,
+      peerId: String(params.message.peerId),
+    });
+    if (latestInteractiveMessageId) {
+      rememberVkInteractiveMessageId({
+        accountId: params.account.accountId,
+        peerId: String(params.message.peerId),
+        conversationMessageId: latestInteractiveMessageId,
+      });
+    }
+    return latestInteractiveMessageId ?? params.rememberedInteractiveMessageId;
+  } catch (error) {
+    params.log?.debug?.(
+      `[${params.account.accountId}] VK long-poll menu history lookup failed: ${String(error)}`,
+    );
+    return params.rememberedInteractiveMessageId;
+  }
 }
 
 function createVkTypingCallbacks(params: {
@@ -257,6 +336,17 @@ export async function handleVkInboundMessage(params: {
     return;
   }
   const rawBody = normalizeVkCommandShortcut(inboundBody);
+  const payloadCommand = resolveVkCommandFromPayload(message.messagePayload);
+  emitVkFlowDebug("inbound", {
+    accountId: account.accountId,
+    transport: account.config.transport,
+    messageId: message.messageId,
+    peerId: message.peerId,
+    senderId: message.senderId,
+    isGroupChat: message.isGroupChat,
+    rawBody,
+    payloadCommand,
+  });
 
   traceInbound("body-ready");
   const core = getVkRuntime();
@@ -267,12 +357,21 @@ export async function handleVkInboundMessage(params: {
         peerId: String(message.peerId),
       })
     : undefined;
+  const longPollPayloadEditConversationMessageId =
+    await resolveVkLongPollPayloadEditConversationMessageId({
+      account,
+      message,
+      payloadCommand,
+      rememberedInteractiveMessageId,
+      log,
+    });
   const commandReplyMenuBehavior = resolveVkCommandReplyMenuBehavior({
     account,
     rawBody,
   });
   const editConversationMessageId =
     resolveVkInboundEditConversationMessageId(message) ??
+    longPollPayloadEditConversationMessageId ??
     (account.config.transport === "callback-api" ? rememberedInteractiveMessageId : undefined);
   statusSink?.({
     lastInboundAt: message.createdAt,

@@ -11,6 +11,7 @@ import { resolveDefaultVkAccountId, resolveVkAccount, type ResolvedVkAccount } f
 import { buildVkRootCommandKeyboardSpec, type VkMenuBehavior } from "./command-ui.js";
 import {
   resolveLatestVkInteractiveMenuId,
+  resolveLatestVkReplyKeyboardMenu,
   retireOlderVkInteractiveMenus,
 } from "./interactive-menu.js";
 import {
@@ -20,10 +21,12 @@ import {
 } from "./interactive-state.js";
 import { buildVkKeyboard, resolveVkKeyboardSpecFromPayload } from "./keyboard.js";
 import { normalizeVkConversationMessageId, normalizeVkReplyToId } from "./reply-to.js";
+import { editVkMessage } from "./vk-core/core/api.js";
 import { sendVkPayload } from "./vk-core/outbound/media.js";
 import { normalizeVkPeerId, sendVkText } from "./vk-core/outbound/send.js";
 
 const VK_GROUP_CHAT_PEER_ID_MIN = 2_000_000_000;
+const VK_ROOT_COMMAND_MENU_TEXT = "VK uses buttons for command menus. Choose a command:";
 
 function resolveVkChannelData(payload: ReplyPayload): Record<string, unknown> | undefined {
   const channelData = payload.channelData;
@@ -117,6 +120,46 @@ async function sendVkOutboundPayload(params: {
   };
 }
 
+async function syncVkLongPollRootLauncher(params: {
+  account: ResolvedVkAccount;
+  peerId: string;
+  keepConversationMessageId: string;
+}): Promise<string | undefined> {
+  try {
+    const launcherMenu = await resolveLatestVkReplyKeyboardMenu({
+      account: params.account,
+      peerId: params.peerId,
+    });
+    if (
+      !launcherMenu?.conversationMessageId ||
+      launcherMenu.conversationMessageId === params.keepConversationMessageId
+    ) {
+      return undefined;
+    }
+
+    const keyboard = buildVkMenuBehaviorKeyboard({
+      behavior: "root",
+      transport: params.account.config.transport,
+    });
+    if (!keyboard) {
+      return undefined;
+    }
+
+    await editVkMessage({
+      token: params.account.token,
+      peerId: normalizeVkPeerId(params.peerId),
+      conversationMessageId: launcherMenu.conversationMessageId,
+      message: VK_ROOT_COMMAND_MENU_TEXT,
+      keyboard,
+      apiVersion: params.account.config.apiVersion,
+    });
+
+    return launcherMenu.conversationMessageId;
+  } catch {
+    return undefined;
+  }
+}
+
 export async function sendVkResolvedOutboundPayload(params: {
   cfg: Parameters<
     NonNullable<ChannelPlugin<ResolvedVkAccount>["outbound"]["sendPayload"]>
@@ -143,10 +186,32 @@ export async function sendVkResolvedOutboundPayload(params: {
     ...params.payload,
     text: resolvedText,
   });
-  const requestedKeyboard = buildVkKeyboard(
-    resolveVkKeyboardSpecFromPayload(params.payload),
-    account.config.transport,
-  );
+  const requestedKeyboardSpec = resolveVkKeyboardSpecFromPayload(params.payload);
+  const requestedKeyboard = buildVkKeyboard(requestedKeyboardSpec, account.config.transport);
+  if (process.env.OPENCLAW_VK_DEBUG_KEYBOARD === "1" && requestedKeyboardSpec) {
+    console.warn(
+      `[vk-keyboard] ${JSON.stringify({
+        accountId: account.accountId,
+        transport: account.config.transport,
+        to: params.to,
+        textPreview: parts.trimmedText.slice(0, 120),
+        requestedKeyboardSpec,
+        requestedKeyboard,
+        channelDataVk:
+          params.payload.channelData &&
+          typeof params.payload.channelData === "object" &&
+          !Array.isArray(params.payload.channelData) &&
+          (params.payload.channelData as Record<string, unknown>).vk &&
+          typeof (params.payload.channelData as Record<string, unknown>).vk === "object" &&
+          !Array.isArray((params.payload.channelData as Record<string, unknown>).vk)
+            ? ((params.payload.channelData as Record<string, unknown>).vk as Record<
+                string,
+                unknown
+              >)
+            : undefined,
+      })}`,
+    );
+  }
   const menuBehavior = resolveVkMenuBehavior(params.payload);
   const requestedEditConversationMessageId = normalizeVkConversationMessageId(
     params.editConversationMessageId ?? null,
@@ -220,10 +285,25 @@ export async function sendVkResolvedOutboundPayload(params: {
       peerId: params.to,
       conversationMessageId: rememberedConversationMessageId,
     });
+    const shouldSyncLongPollRootLauncher =
+      account.config.transport === "long-poll" &&
+      requestedKeyboardSpec?.inline === true &&
+      requestedKeyboardSpec.longPollInlineCallback === true &&
+      !parts.mediaUrls.length;
+    const preservedLongPollLauncherMessageId = shouldSyncLongPollRootLauncher
+      ? await syncVkLongPollRootLauncher({
+          account,
+          peerId: params.to,
+          keepConversationMessageId: rememberedConversationMessageId,
+        })
+      : undefined;
     await retireOlderVkInteractiveMenus({
       account,
       peerId: params.to,
       keepConversationMessageId: rememberedConversationMessageId,
+      ...(preservedLongPollLauncherMessageId
+        ? { skipConversationMessageIds: [preservedLongPollLauncherMessageId] }
+        : {}),
     });
   }
 
