@@ -1,7 +1,11 @@
 import { listAgentEntries } from "../../agents/agent-scope.js";
 import type { ExecToolDefaults } from "../../agents/bash-tools.js";
 import { resolveFastModeState } from "../../agents/fast-mode.js";
-import type { ModelAliasIndex } from "../../agents/model-selection.js";
+import {
+  resolveReasoningDefault,
+  resolveThinkingDefault,
+  type ModelAliasIndex,
+} from "../../agents/model-selection.js";
 import { resolveSandboxRuntimeStatus } from "../../agents/sandbox/runtime-status.js";
 import type { SkillCommandSpec } from "../../agents/skills.js";
 import type { OpenClawConfig } from "../../config/config.js";
@@ -30,6 +34,7 @@ type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["list"]>[num
 let commandsRegistryPromise: Promise<typeof import("../commands-registry.runtime.js")> | null =
   null;
 let skillCommandsPromise: Promise<typeof import("../skill-commands.runtime.js")> | null = null;
+let commandsStatusPromise: Promise<typeof import("./commands-status.runtime.js")> | null = null;
 
 function loadCommandsRegistry() {
   commandsRegistryPromise ??= import("../commands-registry.runtime.js");
@@ -39,6 +44,25 @@ function loadCommandsRegistry() {
 function loadSkillCommands() {
   skillCommandsPromise ??= import("../skill-commands.runtime.js");
   return skillCommandsPromise;
+}
+
+function loadCommandsStatus() {
+  commandsStatusPromise ??= import("./commands-status.runtime.js");
+  return commandsStatusPromise;
+}
+
+function hasStatusOnlyDirective(directives: InlineDirectives): boolean {
+  return (
+    directives.hasStatusDirective &&
+    !directives.hasThinkDirective &&
+    !directives.hasVerboseDirective &&
+    !directives.hasFastDirective &&
+    !directives.hasReasoningDirective &&
+    !directives.hasElevatedDirective &&
+    !directives.hasExecDirective &&
+    !directives.hasModelDirective &&
+    !directives.hasQueueDirective
+  );
 }
 
 export type ReplyDirectiveContinuation = {
@@ -421,6 +445,63 @@ export async function resolveReplyDirectives(params: {
   const blockReplyChunking = blockStreamingEnabled
     ? resolveBlockStreamingChunking(cfg, sessionCtx.Provider, sessionCtx.AccountId)
     : undefined;
+
+  const isStatusOnlyCommand =
+    allowTextCommands &&
+    command.isAuthorizedSender &&
+    !hasInlineStatus &&
+    hasStatusOnlyDirective(directives);
+  if (isStatusOnlyCommand) {
+    const fallbackThinkLevel = resolveThinkingDefault({
+      cfg,
+      provider,
+      model,
+    });
+    const resolvedThinkLevelWithDefault =
+      resolvedThinkLevel ??
+      fallbackThinkLevel ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+    const hasAgentReasoningDefault =
+      agentEntry?.reasoningDefault !== undefined && agentEntry?.reasoningDefault !== null;
+    const reasoningExplicitlySet =
+      directives.reasoningLevel !== undefined ||
+      (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
+      hasAgentReasoningDefault;
+    const thinkingActive = resolvedThinkLevelWithDefault !== "off";
+    if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
+      resolvedReasoningLevel = resolveReasoningDefault({
+        provider,
+        model,
+      });
+    }
+    const contextTokens = resolveContextTokens({ cfg, agentCfg, provider, model });
+    const { buildStatusReply } = await loadCommandsStatus();
+    const reply = await buildStatusReply({
+      cfg,
+      command,
+      sessionEntry,
+      sessionKey,
+      parentSessionKey: ctx.ParentSessionKey,
+      sessionScope,
+      provider,
+      model,
+      contextTokens,
+      resolvedThinkLevel: resolvedThinkLevelWithDefault,
+      resolvedFastMode,
+      resolvedVerboseLevel: resolvedVerboseLevel ?? "off",
+      resolvedReasoningLevel,
+      resolvedElevatedLevel,
+      resolveDefaultThinkingLevel: async () => fallbackThinkLevel,
+      isGroup,
+      defaultGroupActivation: () => defaultActivation,
+      mediaDecisions: ctx.MediaUnderstandingDecisions,
+    });
+    typing.cleanup();
+    return {
+      kind: "reply",
+      reply,
+    };
+  }
 
   const modelState = await createModelSelectionState({
     cfg,
