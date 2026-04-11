@@ -11,7 +11,6 @@ import { formatCliCommand } from "../cli/command-format.js";
 import { createDefaultDeps } from "../cli/deps.js";
 import { isRestartEnabled } from "../config/commands.js";
 import {
-  type ConfigFileSnapshot,
   type OpenClawConfig,
   applyConfigOverrides,
   getRuntimeConfig,
@@ -60,10 +59,6 @@ import type { PluginServicesHandle } from "../plugins/services.js";
 import { getTotalQueueSize } from "../process/command-queue.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
-  resolveCommandSecretsFromActiveRuntimeSnapshot,
-  type CommandSecretAssignment,
-} from "../secrets/runtime-command-secrets.js";
-import {
   GATEWAY_AUTH_SURFACE_PATHS,
   evaluateGatewayAuthSurfaceStates,
 } from "../secrets/runtime-gateway-auth-surfaces.js";
@@ -111,7 +106,6 @@ import { coreGatewayHandlers } from "./server-methods.js";
 import { createExecApprovalHandlers } from "./server-methods/exec-approval.js";
 import { safeParseJson } from "./server-methods/nodes.helpers.js";
 import { createPluginApprovalHandlers } from "./server-methods/plugin-approval.js";
-import { createSecretsHandlers } from "./server-methods/secrets.js";
 import { hasConnectedMobileNode } from "./server-mobile-nodes.js";
 import { loadGatewayModelCatalog } from "./server-model-catalog.js";
 import { createNodeSubscriptionManager } from "./server-node-subscriptions.js";
@@ -122,8 +116,17 @@ import {
 import { setFallbackGatewayContextResolver } from "./server-plugins.js";
 import { createGatewayReloadHandlers } from "./server-reload-handlers.js";
 import { resolveGatewayRuntimeConfig } from "./server-runtime-config.js";
+import {
+  createLazySecretsHandlers,
+  resolveCommandSecretsFromRuntimeSnapshot,
+  type GatewayCommandSecretAssignment,
+} from "./server-runtime-loaders.js";
 import { createGatewayRuntimeState } from "./server-runtime-state.js";
 import { resolveSessionKeyForRun } from "./server-session-key.js";
+import {
+  readGatewayStartupConfigSnapshot,
+  type GatewayStartupConfigSnapshot,
+} from "./server-startup-config.js";
 import { logGatewayStartup } from "./server-startup-log.js";
 import { runStartupSessionMigration } from "./server-startup-session-migration.js";
 import { startGatewaySidecars } from "./server-startup.js";
@@ -267,7 +270,7 @@ function applyGatewayAuthOverridesForStartupPreflight(
 }
 
 function assertValidGatewayStartupConfigSnapshot(
-  snapshot: ConfigFileSnapshot,
+  snapshot: Pick<GatewayStartupConfigSnapshot, "issues" | "path" | "valid">,
   options: { includeDoctorHint?: boolean } = {},
 ): void {
   if (snapshot.valid) {
@@ -284,7 +287,7 @@ function assertValidGatewayStartupConfigSnapshot(
 }
 
 async function prepareGatewayStartupConfig(params: {
-  configSnapshot: ConfigFileSnapshot;
+  configSnapshot: Pick<GatewayStartupConfigSnapshot, "hash" | "issues" | "path" | "valid">;
   // Keep startup auth/runtime behavior aligned with loadConfig(), which applies
   // runtime overrides beyond the raw on-disk snapshot.
   runtimeConfig: OpenClawConfig;
@@ -426,7 +429,7 @@ export async function startGatewayServer(
     description: "raw stream log path override",
   });
 
-  let configSnapshot = await readConfigFileSnapshot();
+  let configSnapshot = await readGatewayStartupConfigSnapshot();
   if (configSnapshot.legacyIssues.length > 0) {
     if (isNixMode) {
       throw new Error(
@@ -442,7 +445,7 @@ export async function startGatewayServer(
   if (autoEnable.changes.length > 0) {
     try {
       await writeConfigFile(autoEnable.config);
-      configSnapshot = await readConfigFileSnapshot();
+      configSnapshot = await readGatewayStartupConfigSnapshot();
       assertValidGatewayStartupConfigSnapshot(configSnapshot);
       log.info(
         `gateway: auto-enabled plugins:\n${autoEnable.changes
@@ -565,7 +568,7 @@ export async function startGatewayServer(
   });
   cfgAtStart = controlUiSeed.config;
   if (authBootstrap.persistedGeneratedToken || controlUiSeed.persistedAllowedOriginsSeed) {
-    const startupSnapshot = await readConfigFileSnapshot();
+    const startupSnapshot = await readGatewayStartupConfigSnapshot();
     startupInternalWriteHash = startupSnapshot.hash ?? null;
   }
   await runChannelPluginStartupMaintenance({
@@ -1215,7 +1218,7 @@ export async function startGatewayServer(
     const pluginApprovalHandlers = createPluginApprovalHandlers(pluginApprovalManager, {
       forwarder: execApprovalForwarder,
     });
-    const secretsHandlers = createSecretsHandlers({
+    const secretsHandlers = await createLazySecretsHandlers({
       reloadSecrets: async () => {
         const active = getActiveSecretsRuntimeSnapshot();
         if (!active) {
@@ -1229,12 +1232,16 @@ export async function startGatewayServer(
       },
       resolveSecrets: async ({ commandName, targetIds }) => {
         const { assignments, diagnostics, inactiveRefPaths } =
-          resolveCommandSecretsFromActiveRuntimeSnapshot({
+          await resolveCommandSecretsFromRuntimeSnapshot({
             commandName,
             targetIds: new Set(targetIds),
           });
         if (assignments.length === 0) {
-          return { assignments: [] as CommandSecretAssignment[], diagnostics, inactiveRefPaths };
+          return {
+            assignments: [] as GatewayCommandSecretAssignment[],
+            diagnostics,
+            inactiveRefPaths,
+          };
         }
         return { assignments, diagnostics, inactiveRefPaths };
       },
