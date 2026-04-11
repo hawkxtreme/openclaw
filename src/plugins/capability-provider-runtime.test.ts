@@ -21,9 +21,13 @@ const mocks = vi.hoisted(() => ({
   withBundledPluginEnablementCompat: vi.fn(({ config }) => config),
   withBundledPluginVitestCompat: vi.fn(({ config }) => config),
   loadBundledCapabilityRuntimeRegistry: vi.fn<
-    (params: { pluginIds: string[]; env?: NodeJS.ProcessEnv }) => ReturnType<typeof createEmptyPluginRegistry>
+    (params: {
+      pluginIds: string[];
+      env?: NodeJS.ProcessEnv;
+    }) => ReturnType<typeof createEmptyPluginRegistry>
   >(() => createEmptyPluginRegistry()),
   hasExplicitPluginConfig: vi.fn(() => false),
+  normalizePluginsConfigWithResolver: vi.fn((plugins) => plugins ?? {}),
 }));
 
 vi.mock("./loader.js", () => ({
@@ -45,6 +49,7 @@ vi.mock("./bundled-capability-runtime.js", () => ({
 
 vi.mock("./config-policy.js", () => ({
   hasExplicitPluginConfig: mocks.hasExplicitPluginConfig,
+  normalizePluginsConfigWithResolver: mocks.normalizePluginsConfigWithResolver,
 }));
 
 let resolvePluginCapabilityProviders: typeof import("./capability-provider-runtime.js").resolvePluginCapabilityProviders;
@@ -157,6 +162,8 @@ describe("resolvePluginCapabilityProviders", () => {
     mocks.loadBundledCapabilityRuntimeRegistry.mockReturnValue(createEmptyPluginRegistry());
     mocks.hasExplicitPluginConfig.mockReset();
     mocks.hasExplicitPluginConfig.mockReturnValue(false);
+    mocks.normalizePluginsConfigWithResolver.mockReset();
+    mocks.normalizePluginsConfigWithResolver.mockImplementation((plugins) => plugins ?? {});
   });
 
   it("uses the active registry when capability providers are already loaded", () => {
@@ -336,6 +343,38 @@ describe("resolvePluginCapabilityProviders", () => {
       env: process.env,
     });
     expect(mocks.withBundledPluginEnablementCompat).not.toHaveBeenCalled();
+  });
+
+  it("reuses the bundled capability fast path across repeated calls", () => {
+    const active = createEmptyPluginRegistry();
+    const bundled = createEmptyPluginRegistry();
+    bundled.mediaUnderstandingProviders.push({
+      pluginId: "google",
+      pluginName: "google",
+      source: "test",
+      provider: {
+        id: "google",
+        capabilities: ["image"],
+        describeImage: vi.fn(),
+      },
+    } as never);
+    mocks.resolveRuntimePluginRegistry.mockReturnValue(active);
+    setBundledCapabilityFixture("mediaUnderstandingProviders");
+    mocks.loadBundledCapabilityRuntimeRegistry.mockReturnValue(bundled);
+
+    const firstProviders = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: {} as OpenClawConfig,
+    });
+    const secondProviders = resolvePluginCapabilityProviders({
+      key: "mediaUnderstandingProviders",
+      cfg: {} as OpenClawConfig,
+    });
+
+    expectResolvedCapabilityProviderIds(firstProviders, ["google"]);
+    expectResolvedCapabilityProviderIds(secondProviders, ["google"]);
+    expect(mocks.loadPluginManifestRegistry).toHaveBeenCalledTimes(1);
+    expect(mocks.loadBundledCapabilityRuntimeRegistry).toHaveBeenCalledTimes(1);
   });
 
   it("keeps the compat loader path when plugin config is explicit", () => {

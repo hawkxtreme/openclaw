@@ -205,6 +205,25 @@ function warmToolsInventoryInBackground(params: Parameters<CommandHandler>[0]): 
   }, 0);
 }
 
+export function maybeWarmInteractiveToolsInventory(
+  params: Parameters<CommandHandler>[0],
+  allowTextCommands: boolean,
+): void {
+  if (!allowTextCommands || !params.command.isAuthorizedSender) {
+    return;
+  }
+  const normalized = params.command.commandBodyNormalized.trim();
+  if (normalized === "/tools" || normalized.startsWith("/tools ")) {
+    return;
+  }
+  const surface = params.ctx.Surface;
+  const commandPlugin = surface ? (getChannelPlugin(surface) ?? undefined) : undefined;
+  if (!hasInteractiveToolsSupport(commandPlugin)) {
+    return;
+  }
+  warmToolsInventoryInBackground(params);
+}
+
 function parseCommandsPageArg(
   commandBodyNormalized: string,
 ): { matched: false } | { matched: true; page: number } | { matched: true; error: string } {

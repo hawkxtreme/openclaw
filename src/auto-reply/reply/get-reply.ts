@@ -14,6 +14,7 @@ import { defaultRuntime } from "../../runtime.js";
 import { normalizeStringEntries } from "../../shared/string-normalization.js";
 import { resolveCommandAuthorization } from "../command-auth.js";
 import type { MsgContext } from "../templating.js";
+import type { ThinkLevel } from "../thinking.js";
 import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { resolveDefaultModel } from "./directive-handling.defaults.js";
@@ -369,6 +370,7 @@ export async function getReplyFromConfig(
     resolvedThinkLevel,
     resolvedVerboseLevel,
     resolvedReasoningLevel,
+    reasoningExplicitlySet,
     resolvedElevatedLevel,
     execOverrides,
     blockStreamingEnabled,
@@ -457,6 +459,14 @@ export async function getReplyFromConfig(
   await maybeEmitMissingResetHooks();
   directives = inlineActionResult.directives;
   abortedLastRun = inlineActionResult.abortedLastRun ?? abortedLastRun;
+  resolvedThinkLevel =
+    resolvedThinkLevel ??
+    (await modelState.resolveDefaultThinkingLevel()) ??
+    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+  const thinkingActive = resolvedThinkLevel !== "off";
+  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
+    resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
+  }
 
   // Allow plugins to intercept and return a synthetic reply before the LLM runs.
   const { getGlobalHookRunner } = await loadHookRunnerGlobal();

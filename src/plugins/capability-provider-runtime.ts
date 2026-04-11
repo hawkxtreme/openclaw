@@ -1,10 +1,10 @@
 import type { OpenClawConfig } from "../config/config.js";
-import { hasExplicitPluginConfig } from "./config-policy.js";
+import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
 import {
   withBundledPluginEnablementCompat,
   withBundledPluginVitestCompat,
 } from "./bundled-compat.js";
-import { loadBundledCapabilityRuntimeRegistry } from "./bundled-capability-runtime.js";
+import { hasExplicitPluginConfig, normalizePluginsConfigWithResolver } from "./config-policy.js";
 import { resolveRuntimePluginRegistry } from "./loader.js";
 import { loadPluginManifestRegistry } from "./manifest-registry.js";
 import type { PluginRegistry } from "./registry.js";
@@ -43,6 +43,9 @@ const CAPABILITY_CONTRACT_KEY: Record<CapabilityProviderRegistryKey, CapabilityC
   musicGenerationProviders: "musicGenerationProviders",
 };
 
+const bundledCapabilityCompatPluginIdsCache = new WeakMap<PluginRegistry, Map<string, string[]>>();
+const bundledCapabilityProvidersCache = new WeakMap<PluginRegistry, Map<string, unknown[]>>();
+
 function createCapabilityTimingTracer(key: CapabilityProviderRegistryKey) {
   const enabled = process.env.OPENCLAW_DEBUG_INGRESS_TIMING === "1";
   const startedAt = enabled ? Date.now() : 0;
@@ -62,7 +65,9 @@ function hasExplicitCapabilityPluginConfig(params: {
   if (!plugins) {
     return false;
   }
-  const relevantPluginIds = new Set(params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean));
+  const relevantPluginIds = new Set(
+    params.pluginIds.map((pluginId) => pluginId.trim()).filter(Boolean),
+  );
   const relevantEntries = Object.fromEntries(
     Object.entries(plugins.entries ?? {}).filter(([pluginId]) => relevantPluginIds.has(pluginId)),
   );
@@ -72,10 +77,51 @@ function hasExplicitCapabilityPluginConfig(params: {
   });
 }
 
+function buildCapabilityConfigCacheKey(params: {
+  key: CapabilityProviderRegistryKey;
+  cfg?: OpenClawConfig;
+}): string {
+  return JSON.stringify({
+    key: params.key,
+    plugins: normalizePluginsConfigWithResolver(params.cfg?.plugins),
+  });
+}
+
+function getOrCreateRegistryCache<T>(
+  cache: WeakMap<PluginRegistry, Map<string, T>>,
+  registry: PluginRegistry,
+): Map<string, T> {
+  const cached = cache.get(registry);
+  if (cached) {
+    return cached;
+  }
+  const created = new Map<string, T>();
+  cache.set(registry, created);
+  return created;
+}
+
 function resolveBundledCapabilityCompatPluginIds(params: {
   key: CapabilityProviderRegistryKey;
   cfg?: OpenClawConfig;
+  activeRegistry?: PluginRegistry;
 }): string[] {
+  if (params.activeRegistry) {
+    const cacheKey = buildCapabilityConfigCacheKey(params);
+    const cache = getOrCreateRegistryCache(
+      bundledCapabilityCompatPluginIdsCache,
+      params.activeRegistry,
+    );
+    const cached = cache.get(cacheKey);
+    if (cached) {
+      return cached;
+    }
+    const resolved = resolveBundledCapabilityCompatPluginIds({
+      key: params.key,
+      cfg: params.cfg,
+    });
+    cache.set(cacheKey, resolved);
+    return resolved;
+  }
   const contractKey = CAPABILITY_CONTRACT_KEY[params.key];
   return loadPluginManifestRegistry({
     config: params.cfg,
@@ -118,13 +164,26 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     return activeProviders.map((entry) => entry.provider) as CapabilityProviderForKey<K>[];
   }
   trace("before-resolve-bundled-plugin-ids");
-  const pluginIds = resolveBundledCapabilityCompatPluginIds(params);
+  const pluginIds = resolveBundledCapabilityCompatPluginIds({
+    ...params,
+    activeRegistry,
+  });
   trace(`after-resolve-bundled-plugin-ids count=${pluginIds.length}`);
   if (
     activeRegistry &&
     !hasExplicitCapabilityPluginConfig({ cfg: params.cfg, pluginIds }) &&
     pluginIds.length > 0
   ) {
+    const cache = getOrCreateRegistryCache(bundledCapabilityProvidersCache, activeRegistry);
+    const providersCacheKey = JSON.stringify({
+      key: params.key,
+      pluginIds,
+    });
+    const cachedProviders = cache.get(providersCacheKey);
+    if (cachedProviders) {
+      trace(`return-cached-bundled-capability-runtime providers=${cachedProviders.length}`);
+      return cachedProviders as CapabilityProviderForKey<K>[];
+    }
     trace("before-bundled-capability-runtime");
     const registry = loadBundledCapabilityRuntimeRegistry({
       pluginIds,
@@ -132,9 +191,11 @@ export function resolvePluginCapabilityProviders<K extends CapabilityProviderReg
     });
     const providers = registry?.[params.key] ?? [];
     trace(`after-bundled-capability-runtime providers=${providers.length}`);
-    return (registry?.[params.key] ?? []).map(
+    const resolvedProviders = (registry?.[params.key] ?? []).map(
       (entry) => entry.provider,
     ) as CapabilityProviderForKey<K>[];
+    cache.set(providersCacheKey, resolvedProviders);
+    return resolvedProviders;
   }
   trace("before-full-compat-loader");
   const compatConfig = resolveCapabilityProviderConfig({ key: params.key, cfg: params.cfg });

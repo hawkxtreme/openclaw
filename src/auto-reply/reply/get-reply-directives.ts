@@ -81,6 +81,7 @@ export type ReplyDirectiveContinuation = {
   resolvedFastMode: boolean;
   resolvedVerboseLevel: VerboseLevel | undefined;
   resolvedReasoningLevel: ReasoningLevel;
+  reasoningExplicitlySet: boolean;
   resolvedElevatedLevel: ElevatedLevel;
   execOverrides?: ExecOverrides;
   blockStreamingEnabled: boolean;
@@ -521,10 +522,13 @@ export async function resolveReplyDirectives(params: {
   });
   provider = modelState.provider;
   model = modelState.model;
-  const resolvedThinkLevelWithDefault =
-    resolvedThinkLevel ??
-    (await modelState.resolveDefaultThinkingLevel()) ??
-    (agentCfg?.thinkingDefault as ThinkLevel | undefined);
+  const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
+  const shouldResolveModelDefaultsBeforeCommands = inlineStatusRequested;
+  const resolvedThinkLevelWithDefault = shouldResolveModelDefaultsBeforeCommands
+    ? (resolvedThinkLevel ??
+      (await modelState.resolveDefaultThinkingLevel()) ??
+      (agentCfg?.thinkingDefault as ThinkLevel | undefined))
+    : resolvedThinkLevel;
 
   // When neither directive nor session nor agent set reasoning, default to model capability
   // (e.g. OpenRouter with reasoning: true). Skip model default when thinking is active
@@ -536,7 +540,12 @@ export async function resolveReplyDirectives(params: {
     (sessionEntry?.reasoningLevel !== undefined && sessionEntry?.reasoningLevel !== null) ||
     hasAgentReasoningDefault;
   const thinkingActive = resolvedThinkLevelWithDefault !== "off";
-  if (!reasoningExplicitlySet && resolvedReasoningLevel === "off" && !thinkingActive) {
+  if (
+    shouldResolveModelDefaultsBeforeCommands &&
+    !reasoningExplicitlySet &&
+    resolvedReasoningLevel === "off" &&
+    !thinkingActive
+  ) {
     resolvedReasoningLevel = await modelState.resolveDefaultReasoningLevel();
   }
 
@@ -554,9 +563,6 @@ export async function resolveReplyDirectives(params: {
     directives.hasModelDirective &&
     ["status", "list"].includes(directives.rawModelDirective?.trim().toLowerCase() ?? "");
   const effectiveModelDirective = isModelListAlias ? undefined : directives.rawModelDirective;
-
-  const inlineStatusRequested = hasInlineStatus && allowTextCommands && command.isAuthorizedSender;
-
   const applyResult = await applyInlineDirectiveOverrides({
     ctx,
     cfg,
@@ -619,6 +625,7 @@ export async function resolveReplyDirectives(params: {
       resolvedFastMode,
       resolvedVerboseLevel,
       resolvedReasoningLevel,
+      reasoningExplicitlySet,
       resolvedElevatedLevel,
       execOverrides,
       blockStreamingEnabled,

@@ -122,9 +122,11 @@ async function loadToolsHarness(options?: {
     };
   });
   const { buildCommandTestParams } = await import("./commands.test-harness.js");
+  const { handleCommands } = await import("./commands-core.js");
   const { handleCommandsListCommand, handleToolsCommand } = await import("./commands-info.js");
   return {
     buildCommandTestParams,
+    handleCommands,
     handleCommandsListCommand,
     handleToolsCommand,
     resolveToolsMock,
@@ -554,6 +556,40 @@ describe("handleToolsCommand", () => {
       );
 
       await handleCommandsListCommand(commandsParams, true);
+      await vi.runAllTimersAsync();
+      await handleToolsCommand(toolsParams, true);
+
+      expect(resolveToolsMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warms the inventory cache after interactive status commands", async () => {
+    vi.useFakeTimers();
+    try {
+      const { buildCommandTestParams, handleCommands, handleToolsCommand, resolveToolsMock } =
+        await loadToolsHarness({
+          channelPlugin: {
+            commands: {
+              buildToolsGroupListChannelData: vi.fn(() => ({ vk: { kind: "groups" } })),
+            },
+          },
+        });
+      const statusParams = buildCommandTestParams(
+        "/status",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+      const toolsParams = buildCommandTestParams(
+        "/tools",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+
+      await handleCommands(statusParams);
       await vi.runAllTimersAsync();
       await handleToolsCommand(toolsParams, true);
 

@@ -20,8 +20,9 @@ function loadCommandHandlersRuntime() {
 let HANDLERS: CommandHandler[] | null = null;
 
 export async function handleCommands(params: HandleCommandsParams): Promise<CommandHandlerResult> {
+  const runtime = await loadCommandHandlersRuntime();
   if (HANDLERS === null) {
-    HANDLERS = (await loadCommandHandlersRuntime()).loadCommandHandlers();
+    HANDLERS = runtime.loadCommandHandlers();
   }
   const resetResult = await maybeHandleResetCommand(params);
   if (resetResult) {
@@ -37,6 +38,7 @@ export async function handleCommands(params: HandleCommandsParams): Promise<Comm
   for (const handler of HANDLERS) {
     const result = await handler(params, allowTextCommands);
     if (result) {
+      runtime.maybeWarmInteractiveToolsInventory?.(params, allowTextCommands);
       return result;
     }
   }

@@ -10,6 +10,7 @@ import {
   handleCommandsListCommand,
   handleExportSessionCommand,
   handleHelpCommand,
+  maybeWarmInteractiveToolsInventory,
   handleStatusCommand,
   handleToolsCommand,
 } from "./commands-info.js";
@@ -67,3 +68,5 @@ export function loadCommandHandlers(): CommandHandler[] {
     handleAbortTrigger,
   ];
 }
+
+export { maybeWarmInteractiveToolsInventory };
