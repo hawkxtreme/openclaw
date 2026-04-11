@@ -3,7 +3,12 @@ import { resolveModelsCommandReply } from "../../../../src/auto-reply/reply/comm
 import type { OpenClawConfig } from "../../../../src/config/config.js";
 import { setActivePluginRegistry } from "../../../../src/plugins/runtime.js";
 import { createTestRegistry } from "../../../../src/test-utils/channel-plugins.js";
-import { vkMessagingAdapter, vkOutboundAdapter, vkPlugin } from "../../api.js";
+import {
+  sendVkResolvedOutboundPayload,
+  vkMessagingAdapter,
+  vkOutboundAdapter,
+  vkPlugin,
+} from "../../api.js";
 
 describe("vk plugin adapters", () => {
   beforeEach(() => {
@@ -638,6 +643,159 @@ describe("vk plugin adapters", () => {
     expect(launcherKeyboard.buttons[0][0].action.type).toBe("text");
     expect(launcherKeyboard.buttons[0][0].action.label).toBe("Menu");
     expect(launcherKeyboard.buttons.at(-1)?.[0]?.action?.label).toBe("Close");
+  });
+
+  it("sends a fresh long-poll inline menu instead of editing the reply-keyboard launcher", async () => {
+    const requestedUrls: URL[] = [];
+    let historyCalls = 0;
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+
+        if (url.pathname === "/method/messages.send") {
+          return new Response(
+            JSON.stringify({
+              response: 9010,
+            }),
+          );
+        }
+
+        if (url.pathname === "/method/messages.getHistory") {
+          historyCalls += 1;
+          if (historyCalls === 1) {
+            return new Response(
+              JSON.stringify({
+                response: {
+                  items: [
+                    {
+                      id: 8999,
+                      conversation_message_id: 205,
+                      out: 1,
+                      text: "Legacy provider menu",
+                      keyboard: {
+                        buttons: [[{ action: { label: "cerebras (4)", type: "text" } }]],
+                      },
+                    },
+                  ],
+                },
+              }),
+            );
+          }
+
+          return new Response(
+            JSON.stringify({
+              response: {
+                items: [
+                  {
+                    id: 9010,
+                    conversation_message_id: 211,
+                    out: 1,
+                    text: "Choose a model",
+                    keyboard: {
+                      inline: true,
+                      buttons: [[{ action: { label: "Browse providers", type: "callback" } }]],
+                    },
+                  },
+                  {
+                    id: 8999,
+                    conversation_message_id: 205,
+                    out: 1,
+                    text: "Legacy provider menu",
+                    keyboard: {
+                      buttons: [[{ action: { label: "cerebras (4)", type: "text" } }]],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+        }
+
+        if (url.pathname === "/method/messages.edit") {
+          return new Response(
+            JSON.stringify({
+              response: 1,
+            }),
+          );
+        }
+
+        throw new Error(`Unexpected VK request ${url.pathname}`);
+      }),
+    );
+
+    const result = await sendVkResolvedOutboundPayload({
+      cfg: {
+        channels: {
+          vk: {
+            groupId: 77,
+            transport: "long-poll",
+            accessToken: "replace-me-callback-token",
+          },
+        },
+      },
+      to: "42",
+      payload: {
+        text: "Choose a model",
+        channelData: vkPlugin.commands?.buildModelBrowseChannelData?.(),
+      },
+      accountId: "default",
+      editConversationMessageId: "205",
+    });
+
+    expect(result).toMatchObject({
+      channel: "vk",
+      messageId: "9010",
+      conversationId: "42",
+    });
+
+    const inlineEdit = requestedUrls.find(
+      (url) =>
+        url.pathname === "/method/messages.edit" &&
+        url.searchParams.get("message") === "Choose a model",
+    );
+    expect(inlineEdit).toBeUndefined();
+
+    const inlineSend = requestedUrls.find(
+      (url) =>
+        url.pathname === "/method/messages.send" &&
+        url.searchParams.get("message") === "Choose a model",
+    );
+    expect(inlineSend).toBeDefined();
+    expect(JSON.parse(inlineSend?.searchParams.get("keyboard") ?? "{}")).toEqual({
+      inline: true,
+      buttons: [
+        [
+          {
+            action: {
+              type: "callback",
+              label: "Browse providers",
+              payload: JSON.stringify({ oc: "/models" }),
+            },
+            color: "secondary",
+          },
+        ],
+        [
+          {
+            action: {
+              type: "callback",
+              label: "Close",
+              payload: JSON.stringify({ oc: "/vk-menu-close" }),
+            },
+            color: "secondary",
+          },
+        ],
+      ],
+    });
+
+    const launcherEdit = requestedUrls.find(
+      (url) => url.pathname === "/method/messages.edit" && url.searchParams.get("cmid") === "205",
+    );
+    expect(launcherEdit).toBeDefined();
+    expect(launcherEdit?.searchParams.get("message")).toBe(
+      "VK uses buttons for command menus. Choose a command:",
+    );
   });
 
   it("advertises VK inline buttons to the agent prompt and message tool", () => {

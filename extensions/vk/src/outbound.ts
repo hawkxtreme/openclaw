@@ -160,6 +160,34 @@ async function syncVkLongPollRootLauncher(params: {
   }
 }
 
+async function shouldSendFreshLongPollInlineMenu(params: {
+  account: ResolvedVkAccount;
+  peerId: string;
+  requestedEditConversationMessageId?: string;
+  requestedKeyboardSpec?: ReturnType<typeof resolveVkKeyboardSpecFromPayload>;
+}): Promise<boolean> {
+  if (
+    params.account.config.transport !== "long-poll" ||
+    !params.requestedEditConversationMessageId ||
+    params.requestedKeyboardSpec?.inline !== true ||
+    params.requestedKeyboardSpec.longPollInlineCallback !== true
+  ) {
+    return false;
+  }
+
+  try {
+    const latestReplyKeyboardMenu = await resolveLatestVkReplyKeyboardMenu({
+      account: params.account,
+      peerId: params.peerId,
+    });
+    return (
+      latestReplyKeyboardMenu?.conversationMessageId === params.requestedEditConversationMessageId
+    );
+  } catch {
+    return false;
+  }
+}
+
 export async function sendVkResolvedOutboundPayload(params: {
   cfg: Parameters<
     NonNullable<ChannelPlugin<ResolvedVkAccount>["outbound"]["sendPayload"]>
@@ -216,6 +244,12 @@ export async function sendVkResolvedOutboundPayload(params: {
   const requestedEditConversationMessageId = normalizeVkConversationMessageId(
     params.editConversationMessageId ?? null,
   );
+  const sendFreshLongPollInlineMenu = await shouldSendFreshLongPollInlineMenu({
+    account,
+    peerId: params.to,
+    requestedEditConversationMessageId,
+    requestedKeyboardSpec,
+  });
   let rememberedInteractiveMessageId: string | undefined;
   if (
     account.config.transport === "callback-api" &&
@@ -241,8 +275,9 @@ export async function sendVkResolvedOutboundPayload(params: {
       }
     }
   }
-  const editConversationMessageId =
-    requestedEditConversationMessageId ?? rememberedInteractiveMessageId;
+  const editConversationMessageId = sendFreshLongPollInlineMenu
+    ? undefined
+    : (requestedEditConversationMessageId ?? rememberedInteractiveMessageId);
   const shouldClearRememberedMenu =
     Boolean(editConversationMessageId) && !requestedKeyboard && !parts.mediaUrls.length;
   const shouldAttachMenuBehaviorKeyboard =
