@@ -28,6 +28,25 @@ describe("vk command ui", () => {
     ]);
   });
 
+  it("omits zero-count suffixes on placeholder tool groups", () => {
+    const channelData = buildVkToolsGroupListChannelData({
+      groups: [
+        { id: "builtin", label: "Built-in tools", count: 0 },
+        { id: "connected", label: "Connected tools", count: 0 },
+        { id: "channel", label: "Channel tools", count: 0 },
+      ],
+      currentPage: 1,
+      totalPages: 1,
+    });
+
+    expect(channelData).not.toBeNull();
+    expect(getButtonLabels(channelData!)).toEqual([
+      ["Built-in", "Connected"],
+      ["Channel"],
+      ["< Back", "Close"],
+    ]);
+  });
+
   it("keeps a back path on the model provider picker", () => {
     const channelData = buildVkModelsProviderChannelData({
       providers: [

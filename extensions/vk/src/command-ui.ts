@@ -364,7 +364,10 @@ export function buildVkToolsGroupListChannelData(params: {
 
   const rows = chunkButtons(
     params.groups.map((group) => ({
-      text: `${shortenToolGroupLabel(group.label)} (${group.count})`,
+      text:
+        group.count > 0
+          ? `${shortenToolGroupLabel(group.label)} (${group.count})`
+          : shortenToolGroupLabel(group.label),
       callback_data: `/tools ${group.id}`,
     })),
     TOOL_GROUPS_PER_ROW,

@@ -216,54 +216,125 @@ describe("handleToolsCommand", () => {
     expect(result?.reply?.text).toContain("Use /tools verbose for descriptions.");
   });
 
-  it("returns a VK button menu for tool groups", async () => {
-    const buildToolsGroupListChannelData = vi.fn((params) => ({
-      vk: {
-        groups: params.groups,
-        currentPage: params.currentPage,
-        totalPages: params.totalPages,
-      },
-    }));
-    const { buildCommandTestParams, handleToolsCommand } = await loadToolsHarness({
-      channelPlugin: {
-        commands: {
-          buildToolsGroupListChannelData,
+  it("returns a populated VK button menu for tool groups once inventory is warm", async () => {
+    vi.useFakeTimers();
+    try {
+      const buildToolsGroupListChannelData = vi.fn((params) => ({
+        vk: {
+          groups: params.groups,
+          currentPage: params.currentPage,
+          totalPages: params.totalPages,
         },
-      },
-    });
-    const params = buildCommandTestParams(
-      "/tools",
-      buildConfig(),
-      { Surface: "vk", Provider: "vk" },
-      { workspaceDir: "/tmp" },
-    );
-
-    const result = await handleToolsCommand(params, true);
-
-    expect(result).toEqual({
-      shouldContinue: false,
-      reply: {
-        text: "Available tools\n\nProfile: coding\nChoose a tool group:",
-        channelData: {
-          vk: {
-            groups: [
-              { id: "core", label: "Built-in tools", count: 1 },
-              { id: "plugin", label: "Connected tools", count: 1 },
-            ],
-            currentPage: 1,
-            totalPages: 1,
+      }));
+      const { buildCommandTestParams, handleToolsCommand } = await loadToolsHarness({
+        channelPlugin: {
+          commands: {
+            buildToolsGroupListChannelData,
           },
         },
-      },
-    });
-    expect(buildToolsGroupListChannelData).toHaveBeenCalledWith({
-      groups: [
-        { id: "core", label: "Built-in tools", count: 1 },
-        { id: "plugin", label: "Connected tools", count: 1 },
-      ],
-      currentPage: 1,
-      totalPages: 1,
-    });
+      });
+      const params = buildCommandTestParams(
+        "/tools",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+
+      await handleToolsCommand(params, true);
+      await vi.runAllTimersAsync();
+
+      const result = await handleToolsCommand(params, true);
+
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "Available tools\n\nProfile: coding\nChoose a tool group:",
+          channelData: {
+            vk: {
+              groups: [
+                { id: "core", label: "Built-in tools", count: 1 },
+                { id: "plugin", label: "Connected tools", count: 1 },
+              ],
+              currentPage: 1,
+              totalPages: 1,
+            },
+          },
+        },
+      });
+      expect(buildToolsGroupListChannelData).toHaveBeenLastCalledWith({
+        groups: [
+          { id: "core", label: "Built-in tools", count: 1 },
+          { id: "plugin", label: "Connected tools", count: 1 },
+        ],
+        currentPage: 1,
+        totalPages: 1,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("returns a fast placeholder VK tool menu while warming a cold inventory", async () => {
+    vi.useFakeTimers();
+    try {
+      const buildToolsGroupListChannelData = vi.fn((params) => ({
+        vk: {
+          groups: params.groups,
+          currentPage: params.currentPage,
+          totalPages: params.totalPages,
+        },
+      }));
+      const { buildCommandTestParams, handleToolsCommand, resolveToolsMock } =
+        await loadToolsHarness({
+          channelPlugin: {
+            commands: {
+              buildToolsGroupListChannelData,
+            },
+          },
+        });
+      const params = buildCommandTestParams(
+        "/tools",
+        buildConfig(),
+        { Surface: "vk", Provider: "vk" },
+        { workspaceDir: "/tmp" },
+      );
+
+      const result = await handleToolsCommand(params, true);
+
+      expect(resolveToolsMock).not.toHaveBeenCalled();
+      expect(result).toEqual({
+        shouldContinue: false,
+        reply: {
+          text: "Available tools\n\nLoading current availability...\nChoose a tool group:",
+          channelData: {
+            vk: {
+              groups: [
+                { id: "core", label: "Built-in tools", count: 0 },
+                { id: "plugin", label: "Connected tools", count: 0 },
+                { id: "channel", label: "Channel tools", count: 0 },
+              ],
+              currentPage: 1,
+              totalPages: 1,
+            },
+          },
+        },
+      });
+      expect(buildToolsGroupListChannelData).toHaveBeenCalledWith({
+        groups: [
+          { id: "core", label: "Built-in tools", count: 0 },
+          { id: "plugin", label: "Connected tools", count: 0 },
+          { id: "channel", label: "Channel tools", count: 0 },
+        ],
+        currentPage: 1,
+        totalPages: 1,
+      });
+
+      await vi.runAllTimersAsync();
+
+      expect(resolveToolsMock).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("returns a VK button menu for tools inside a group", async () => {

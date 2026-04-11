@@ -28,6 +28,11 @@ const TOOLS_GROUPS_PER_PAGE = 6;
 const TOOLS_PER_PAGE = 6;
 const TOOLS_INVENTORY_CACHE_TTL_MS = 60_000;
 const TOOLS_INVENTORY_CACHE_MAX_ENTRIES = 64;
+const PLACEHOLDER_INTERACTIVE_TOOLS_GROUPS = [
+  { id: "core", label: "Built-in tools", count: 0 },
+  { id: "plugin", label: "Connected tools", count: 0 },
+  { id: "channel", label: "Channel tools", count: 0 },
+] as const;
 
 type ToolsInventoryCacheEntry = {
   expiresAt: number;
@@ -143,6 +148,15 @@ function resolveCachedToolsInventory(
   return result;
 }
 
+function peekCachedToolsInventory(
+  params: ResolveEffectiveToolInventoryParams,
+): EffectiveToolInventoryResult | null {
+  const now = Date.now();
+  pruneToolsInventoryCache(now);
+  const cached = toolsInventoryCache.get(buildToolsInventoryCacheKey(params));
+  return cached && cached.expiresAt > now ? cached.result : null;
+}
+
 function resolveToolsInventoryParams(
   params: Parameters<CommandHandler>[0],
 ): ResolveEffectiveToolInventoryParams {
@@ -194,15 +208,18 @@ function resolveToolsInventoryParams(
   };
 }
 
-function warmToolsInventoryInBackground(params: Parameters<CommandHandler>[0]): void {
-  const inventoryParams = resolveToolsInventoryParams(params);
+function scheduleToolsInventoryWarmup(params: ResolveEffectiveToolInventoryParams): void {
   setTimeout(() => {
     try {
-      resolveCachedToolsInventory(inventoryParams);
+      resolveCachedToolsInventory(params);
     } catch {
       // Ignore warm-up failures; the actual /tools command will surface a user-facing error.
     }
   }, 0);
+}
+
+function warmToolsInventoryInBackground(params: Parameters<CommandHandler>[0]): void {
+  scheduleToolsInventoryWarmup(resolveToolsInventoryParams(params));
 }
 
 export function maybeWarmInteractiveToolsInventory(
@@ -409,6 +426,23 @@ function buildInteractiveToolsReply(params: {
   };
 }
 
+function buildInteractiveToolsPlaceholderReply(
+  commandPlugin: NonNullable<ReturnType<typeof getChannelPlugin>>,
+): ReplyPayload | null {
+  const channelData = commandPlugin.commands?.buildToolsGroupListChannelData?.({
+    groups: [...PLACEHOLDER_INTERACTIVE_TOOLS_GROUPS],
+    currentPage: 1,
+    totalPages: 1,
+  });
+  if (!channelData) {
+    return null;
+  }
+  return {
+    text: "Available tools\n\nLoading current availability...\nChoose a tool group:",
+    channelData,
+  };
+}
+
 export const handleHelpCommand: CommandHandler = async (params, allowTextCommands) => {
   if (!allowTextCommands) {
     return null;
@@ -515,7 +549,21 @@ export const handleToolsCommand: CommandHandler = async (params, allowTextComman
   }
 
   try {
-    const result = resolveCachedToolsInventory(resolveToolsInventoryParams(params));
+    const inventoryParams = resolveToolsInventoryParams(params);
+    if (interactiveTarget?.kind === "groups" && commandPlugin) {
+      const cached = peekCachedToolsInventory(inventoryParams);
+      if (!cached) {
+        const placeholderReply = buildInteractiveToolsPlaceholderReply(commandPlugin);
+        if (placeholderReply) {
+          scheduleToolsInventoryWarmup(inventoryParams);
+          return {
+            shouldContinue: false,
+            reply: placeholderReply,
+          };
+        }
+      }
+    }
+    const result = resolveCachedToolsInventory(inventoryParams);
     const interactiveReply = commandPlugin
       ? buildInteractiveToolsReply({
           result,
