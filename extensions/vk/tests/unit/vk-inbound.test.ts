@@ -1622,7 +1622,7 @@ describe("vk inbound handling", () => {
     });
   });
 
-  it("edits long-poll reply-keyboard terminal commands in place using the remembered menu id", async () => {
+  it("sends long-poll reply-keyboard terminal commands as fresh messages instead of editing remembered menus", async () => {
     resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
       access: {
         decision: "allow",
@@ -1640,6 +1640,26 @@ describe("vk inbound handling", () => {
       vi.fn(async (input: string | URL) => {
         const url = new URL(String(input));
         requestedUrls.push(url);
+        if (url.pathname === "/method/messages.getHistory") {
+          return new Response(
+            JSON.stringify({
+              response: {
+                count: 1,
+                items: [
+                  {
+                    id: 95131,
+                    conversation_message_id: 207,
+                    out: 1,
+                    text: "All systems nominal.",
+                    keyboard: {
+                      buttons: [[{ action: { label: "Menu", type: "text" } }]],
+                    },
+                  },
+                ],
+              },
+            }),
+          );
+        }
         return new Response(
           JSON.stringify({
             response: 95131,
@@ -1701,10 +1721,14 @@ describe("vk inbound handling", () => {
       text: "All systems nominal.",
     });
 
-    const editUrl = requestedUrls.find((url) => url.pathname === "/method/messages.edit");
-    expect(editUrl?.searchParams.get("cmid")).toBe("201");
-    expect(editUrl?.searchParams.get("message")).toBe("All systems nominal.");
-    expect(requestedUrls.some((url) => url.pathname === "/method/messages.send")).toBe(false);
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.send",
+      "/method/messages.getHistory",
+      "/method/messages.getHistory",
+    ]);
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe("All systems nominal.");
+    expect(requestedUrls.some((url) => url.pathname === "/method/messages.edit")).toBe(false);
   });
 
   it("skips long-poll menu history lookup when the inbound callback already has an edit target", async () => {
@@ -1802,7 +1826,7 @@ describe("vk inbound handling", () => {
     expect(requestedUrls.some((url) => url.pathname === "/method/messages.send")).toBe(false);
   });
 
-  it("refreshes the long-poll reply-keyboard edit target from VK history when memory is stale", async () => {
+  it("skips long-poll reply-keyboard history lookup and sends fresh replies even when memory is stale", async () => {
     resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
       access: {
         decision: "allow",
@@ -1824,37 +1848,18 @@ describe("vk inbound handling", () => {
           return new Response(
             JSON.stringify({
               response: {
-                count: 2,
+                count: 1,
                 items: [
                   {
-                    id: 95140,
-                    conversation_message_id: 205,
+                    id: 95141,
+                    conversation_message_id: 207,
                     out: 1,
-                    text: "VK uses buttons for command menus. Choose a command:",
+                    text: "All systems nominal.",
                     keyboard: {
-                      buttons: [[{ action: { label: "Status", type: "text" } }]],
-                    },
-                  },
-                  {
-                    id: 95139,
-                    conversation_message_id: 200,
-                    out: 1,
-                    text: "Old menu",
-                    keyboard: {
-                      buttons: [[{ action: { label: "Status", type: "text" } }]],
+                      buttons: [[{ action: { label: "Menu", type: "text" } }]],
                     },
                   },
                 ],
-              },
-            }),
-          );
-        }
-        if (url.pathname === "/method/messages.edit" && url.searchParams.get("cmid") === "200") {
-          return new Response(
-            JSON.stringify({
-              error: {
-                error_code: 100,
-                error_msg: "stale cmid",
               },
             }),
           );
@@ -1915,11 +1920,14 @@ describe("vk inbound handling", () => {
       text: "All systems nominal.",
     });
 
-    const editUrl = requestedUrls.find(
-      (url) => url.pathname === "/method/messages.edit" && url.searchParams.get("cmid") === "205",
-    );
-    expect(editUrl?.searchParams.get("message")).toBe("All systems nominal.");
-    expect(requestedUrls.some((url) => url.pathname === "/method/messages.send")).toBe(false);
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.send",
+      "/method/messages.getHistory",
+      "/method/messages.getHistory",
+    ]);
+    const sendUrl = requestedUrls.find((url) => url.pathname === "/method/messages.send");
+    expect(sendUrl?.searchParams.get("message")).toBe("All systems nominal.");
+    expect(requestedUrls.some((url) => url.pathname === "/method/messages.edit")).toBe(false);
   });
 
   it("sends long-poll typed slash-command menus as fresh messages instead of editing old menus", async () => {

@@ -11,11 +11,7 @@ import {
   type VkMenuBehavior,
   VK_CLOSE_MENU_COMMAND,
 } from "./command-ui.js";
-import { resolveLatestVkInteractiveMenuId } from "./interactive-menu.js";
-import {
-  rememberVkInteractiveMessageId,
-  resolveRememberedVkInteractiveMessageId,
-} from "./interactive-state.js";
+import { resolveRememberedVkInteractiveMessageId } from "./interactive-state.js";
 import { resolveVkCommandFromPayload } from "./keyboard.js";
 import { sendVkResolvedOutboundPayload } from "./outbound.js";
 import { resolveVkInboundEditConversationMessageId } from "./reply-to.js";
@@ -252,45 +248,6 @@ async function deliverVkReply(params: {
   params.statusSink?.({ lastOutboundAt: Date.now() });
 }
 
-async function resolveVkLongPollPayloadEditConversationMessageId(params: {
-  account: ResolvedVkAccount;
-  message: VkInboundMessage;
-  payloadCommand?: string;
-  rememberedInteractiveMessageId?: string;
-  log?: VkInboundLog;
-}): Promise<string | undefined> {
-  if (params.account.config.transport !== "long-poll" || !params.payloadCommand?.startsWith("/")) {
-    return undefined;
-  }
-
-  if (resolveVkInboundEditConversationMessageId(params.message)) {
-    return undefined;
-  }
-
-  // Long-poll button clicks arrive as fresh user messages, so the inbound
-  // cmid belongs to the click itself. Resolve the newest interactive menu from
-  // VK history and only fall back to the remembered in-process id.
-  try {
-    const latestInteractiveMessageId = await resolveLatestVkInteractiveMenuId({
-      account: params.account,
-      peerId: String(params.message.peerId),
-    });
-    if (latestInteractiveMessageId) {
-      rememberVkInteractiveMessageId({
-        accountId: params.account.accountId,
-        peerId: String(params.message.peerId),
-        conversationMessageId: latestInteractiveMessageId,
-      });
-    }
-    return latestInteractiveMessageId ?? params.rememberedInteractiveMessageId;
-  } catch (error) {
-    params.log?.debug?.(
-      `[${params.account.accountId}] VK long-poll menu history lookup failed: ${String(error)}`,
-    );
-    return params.rememberedInteractiveMessageId;
-  }
-}
-
 function createVkTypingCallbacks(params: {
   account: ResolvedVkAccount;
   message: VkInboundMessage;
@@ -361,21 +318,14 @@ export async function handleVkInboundMessage(params: {
         peerId: String(message.peerId),
       })
     : undefined;
-  const longPollPayloadEditConversationMessageId =
-    await resolveVkLongPollPayloadEditConversationMessageId({
-      account,
-      message,
-      payloadCommand,
-      rememberedInteractiveMessageId,
-      log,
-    });
   const commandReplyMenuBehavior = resolveVkCommandReplyMenuBehavior({
     account,
     rawBody,
   });
+  // Long-poll reply-keyboard commands arrive as fresh user messages. Only
+  // synthetic callback events should edit an existing interactive menu.
   const editConversationMessageId =
     resolveVkInboundEditConversationMessageId(message) ??
-    longPollPayloadEditConversationMessageId ??
     (account.config.transport === "callback-api" ? rememberedInteractiveMessageId : undefined);
   statusSink?.({
     lastInboundAt: message.createdAt,
