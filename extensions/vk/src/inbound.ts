@@ -263,6 +263,10 @@ async function resolveVkLongPollPayloadEditConversationMessageId(params: {
     return undefined;
   }
 
+  if (resolveVkInboundEditConversationMessageId(params.message)) {
+    return undefined;
+  }
+
   // Long-poll button clicks arrive as fresh user messages, so the inbound
   // cmid belongs to the click itself. Resolve the newest interactive menu from
   // VK history and only fall back to the remembered in-process id.

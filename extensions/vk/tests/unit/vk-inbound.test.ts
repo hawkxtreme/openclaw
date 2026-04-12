@@ -1707,6 +1707,101 @@ describe("vk inbound handling", () => {
     expect(requestedUrls.some((url) => url.pathname === "/method/messages.send")).toBe(false);
   });
 
+  it("skips long-poll menu history lookup when the inbound callback already has an edit target", async () => {
+    resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
+      access: {
+        decision: "allow",
+        reason: "allowlist",
+        reasonCode: "allowlist",
+        effectiveAllowFrom: ["42"],
+      },
+      shouldComputeAuth: false,
+      senderAllowedForCommands: true,
+      commandAuthorized: true,
+    });
+    const requestedUrls: URL[] = [];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (input: string | URL) => {
+        const url = new URL(String(input));
+        requestedUrls.push(url);
+        if (url.pathname === "/method/messages.getHistory") {
+          return new Response(
+            JSON.stringify({
+              response: {
+                count: 0,
+                items: [],
+              },
+            }),
+          );
+        }
+
+        return new Response(
+          JSON.stringify({
+            response: 95132,
+          }),
+        );
+      }),
+    );
+    const cfg: OpenClawConfig = {
+      channels: {
+        vk: {
+          groupId: 77,
+          transport: "long-poll",
+          accessToken: "replace-me-callback-token",
+          dmPolicy: "allowlist",
+          allowFrom: ["42"],
+        },
+      },
+    };
+    const account = resolveVkAccount({
+      cfg,
+      accountId: "default",
+    });
+
+    await handleVkInboundMessage({
+      cfg,
+      account,
+      message: {
+        accountId: "default",
+        groupId: 77,
+        transport: "long-poll",
+        eventType: "message_new",
+        dedupeKey: "event:interactive-longpoll-callback-1",
+        messageId: "callback-event-701",
+        conversationMessageId: "203",
+        editConversationMessageId: "203",
+        peerId: 42,
+        senderId: 42,
+        text: "/status",
+        createdAt: 1700000000000,
+        isGroupChat: false,
+        rawUpdate: {},
+        messagePayload: { oc: "/status" },
+      } as never,
+    });
+
+    expect(dispatchInboundDirectDmWithRuntimeMock).toHaveBeenCalledTimes(1);
+    expect(dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0]).toMatchObject({
+      rawBody: "/status",
+    });
+
+    const params = dispatchInboundDirectDmWithRuntimeMock.mock.calls[0]?.[0] as
+      | { deliver?: (payload: unknown) => Promise<void> }
+      | undefined;
+    await params?.deliver?.({
+      text: "All systems nominal.",
+    });
+
+    expect(requestedUrls.map((url) => url.pathname)).toEqual([
+      "/method/messages.edit",
+      "/method/messages.getHistory",
+    ]);
+    expect(requestedUrls[0]?.searchParams.get("cmid")).toBe("203");
+    expect(requestedUrls[0]?.searchParams.get("message")).toBe("All systems nominal.");
+    expect(requestedUrls.some((url) => url.pathname === "/method/messages.send")).toBe(false);
+  });
+
   it("refreshes the long-poll reply-keyboard edit target from VK history when memory is stale", async () => {
     resolveInboundDirectDmAccessWithRuntimeMock.mockResolvedValue({
       access: {
