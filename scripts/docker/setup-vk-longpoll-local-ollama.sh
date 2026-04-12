@@ -15,6 +15,20 @@ fail() {
   exit 1
 }
 
+print_help() {
+  cat <<'EOF'
+Usage:
+  setup-vk-longpoll-local-ollama.sh [options]
+
+Options:
+  --group-id <id>        VK community id
+  --group <value>        VK community URL or club/public handle
+  --token <token>        VK community token for this one-shot run
+  --dm-policy <policy>   VK DM policy (default: pairing)
+  --help                 Show this help
+EOF
+}
+
 normalize_vk_group_id() {
   local raw="$1"
 
@@ -35,6 +49,38 @@ normalize_vk_group_id() {
 
   return 1
 }
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --group-id)
+      [[ $# -ge 2 ]] || fail "--group-id requires a value"
+      VK_GROUP_ID="$2"
+      shift 2
+      ;;
+    --group)
+      [[ $# -ge 2 ]] || fail "--group requires a value"
+      VK_GROUP="$2"
+      shift 2
+      ;;
+    --token)
+      [[ $# -ge 2 ]] || fail "--token requires a value"
+      VK_GROUP_TOKEN="$2"
+      shift 2
+      ;;
+    --dm-policy)
+      [[ $# -ge 2 ]] || fail "--dm-policy requires a value"
+      VK_DM_POLICY="$2"
+      shift 2
+      ;;
+    --help | -h)
+      print_help
+      exit 0
+      ;;
+    *)
+      fail "Unknown argument: $1"
+      ;;
+  esac
+done
 
 if [[ -n "$VK_GROUP_ID" && -n "$VK_GROUP" ]]; then
   fail "Set only one of VK_GROUP_ID or VK_GROUP"

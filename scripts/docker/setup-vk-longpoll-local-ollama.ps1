@@ -1,3 +1,10 @@
+param(
+  [string]$VkGroupId,
+  [string]$VkGroup,
+  [string]$VkGroupToken,
+  [string]$DmPolicy
+)
+
 $ErrorActionPreference = "Stop"
 
 function Resolve-GitBash {
@@ -28,5 +35,23 @@ if (-not (Test-Path -LiteralPath $bashWrapper)) {
 }
 
 $bashExe = Resolve-GitBash
-& $bashExe $bashWrapper
+$bashArgs = @($bashWrapper)
+
+if ($VkGroupId) {
+  $bashArgs += @("--group-id", $VkGroupId)
+}
+
+if ($VkGroup) {
+  $bashArgs += @("--group", $VkGroup)
+}
+
+if ($VkGroupToken) {
+  $bashArgs += @("--token", $VkGroupToken)
+}
+
+if ($DmPolicy) {
+  $bashArgs += @("--dm-policy", $DmPolicy)
+}
+
+& $bashExe @bashArgs
 exit $LASTEXITCODE

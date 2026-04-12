@@ -135,6 +135,19 @@ function runVkDockerSetup(
   });
 }
 
+function runVkDockerSetupArgs(
+  sandbox: DockerSetupSandbox,
+  args: string[],
+  overrides: Record<string, string | undefined> = {},
+) {
+  return spawnSync("bash", [sandbox.vkScriptPath, ...args], {
+    cwd: sandbox.rootDir,
+    env: createEnv(sandbox, overrides),
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+}
+
 async function resetDockerLog(sandbox: DockerSetupSandbox) {
   await writeFile(sandbox.logPath, "");
 }
@@ -375,6 +388,36 @@ describe("scripts/docker/setup.sh", () => {
       VK_GROUP: "https://vk.com/club237442417",
       VK_GROUP_TOKEN: "vk1.a.REPLACE_ME",
     });
+
+    expect(result.status).toBe(0);
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const extraConfigIdx = findVkWrapperBatchConfigLineIndex(lines, "237442417");
+    const defaultsConfigIdx = lines.findIndex((line) =>
+      line.includes(
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
+      ),
+    );
+    const gatewayStartIdx = findGatewayStartLineIndex(lines);
+
+    expect(extraConfigIdx).toBeGreaterThanOrEqual(0);
+    expect(defaultsConfigIdx).toBeGreaterThan(extraConfigIdx);
+    expect(gatewayStartIdx).toBeGreaterThan(defaultsConfigIdx);
+  });
+
+  it("accepts CLI arguments in the dedicated wrapper", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runVkDockerSetupArgs(
+      activeSandbox,
+      ["--group", "https://vk.com/club237442417", "--token", "vk1.a.REPLACE_ME"],
+      {
+        VK_GROUP: undefined,
+        VK_GROUP_ID: undefined,
+        VK_GROUP_TOKEN: undefined,
+      },
+    );
 
     expect(result.status).toBe(0);
 

@@ -152,6 +152,14 @@ export VK_GROUP_TOKEN='vk1.a.REPLACE_ME'
 ./scripts/docker/setup-vk-longpoll-local-ollama.sh
 ```
 
+One-shot CLI form:
+
+```bash
+./scripts/docker/setup-vk-longpoll-local-ollama.sh \
+  --group https://vk.com/club123456789 \
+  --token 'vk1.a.REPLACE_ME'
+```
+
 Or paste the community URL directly:
 
 ```bash
@@ -168,6 +176,14 @@ $env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
 .\scripts\docker\setup-vk-longpoll-local-ollama.ps1
 ```
 
+One-shot CLI form:
+
+```powershell
+.\scripts\docker\setup-vk-longpoll-local-ollama.ps1 `
+  -VkGroup "https://vk.com/club123456789" `
+  -VkGroupToken "vk1.a.REPLACE_ME"
+```
+
 Or:
 
 ```powershell
@@ -178,6 +194,7 @@ $env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
 
 The wrapper generates the same batch config as the example file, keeps the
 token as an env-backed SecretRef, and forwards into `./scripts/docker/setup.sh`.
+If you do not want the token in shell history, prefer the env-based form above.
 
 Bash:
 
