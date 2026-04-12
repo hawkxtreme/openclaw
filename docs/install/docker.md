@@ -124,15 +124,35 @@ and setup-time config writes through `openclaw-gateway` with
 
 The setup script accepts these optional environment variables:
 
-| Variable                       | Purpose                                                          |
-| ------------------------------ | ---------------------------------------------------------------- |
-| `OPENCLAW_IMAGE`               | Use a remote image instead of building locally                   |
-| `OPENCLAW_DOCKER_APT_PACKAGES` | Install extra apt packages during build (space-separated)        |
-| `OPENCLAW_EXTENSIONS`          | Pre-install extension deps at build time (space-separated names) |
-| `OPENCLAW_EXTRA_MOUNTS`        | Extra host bind mounts (comma-separated `source:target[:opts]`)  |
-| `OPENCLAW_HOME_VOLUME`         | Persist `/home/node` in a named Docker volume                    |
-| `OPENCLAW_SANDBOX`             | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)           |
-| `OPENCLAW_DOCKER_SOCKET`       | Override Docker socket path                                      |
+| Variable                            | Purpose                                                                                              |
+| ----------------------------------- | ---------------------------------------------------------------------------------------------------- |
+| `OPENCLAW_DOCKER_CONFIG_BATCH_JSON` | Apply extra `openclaw config set --batch-json` writes after onboarding and before the gateway starts |
+| `OPENCLAW_IMAGE`                    | Use a remote image instead of building locally                                                       |
+| `OPENCLAW_DOCKER_APT_PACKAGES`      | Install extra apt packages during build (space-separated)                                            |
+| `OPENCLAW_EXTENSIONS`               | Pre-install extension deps at build time (space-separated names)                                     |
+| `OPENCLAW_EXTRA_MOUNTS`             | Extra host bind mounts (comma-separated `source:target[:opts]`)                                      |
+| `OPENCLAW_HOME_VOLUME`              | Persist `/home/node` in a named Docker volume                                                        |
+| `OPENCLAW_SANDBOX`                  | Opt in to sandbox bootstrap (`1`, `true`, `yes`, `on`)                                               |
+| `OPENCLAW_DOCKER_SOCKET`            | Override Docker socket path                                                                          |
+
+### Apply extra config during setup
+
+If you already know the config you want, you can inject it directly into the Docker setup flow:
+
+```bash
+export OPENCLAW_DOCKER_CONFIG_BATCH_JSON='[{"path":"agents.defaults.model.primary","value":"ollama/qwen3.5:9b"},{"path":"agents.defaults.models","value":{"ollama/qwen3.5:9b":{}}},{"path":"models.providers.ollama","value":{"baseUrl":"http://host.docker.internal:11434","apiKey":"ollama-local","api":"ollama","models":[{"id":"qwen3.5:9b","name":"Qwen 3.5 9B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32768,"maxTokens":131072}]}}]'
+./scripts/docker/setup.sh
+```
+
+This is useful when you want a reproducible local-model Docker bootstrap, CI smoke config, or a pre-pinned provider/model without extra post-setup CLI steps.
+
+The script applies `OPENCLAW_DOCKER_CONFIG_BATCH_JSON`:
+
+1. after onboarding
+2. before Docker-specific gateway defaults are pinned
+3. before `docker compose up -d openclaw-gateway`
+
+The value is **not** written back into the generated `.env`, so sensitive or environment-specific config can stay ephemeral.
 
 ### Health checks
 

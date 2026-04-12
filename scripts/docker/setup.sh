@@ -515,6 +515,12 @@ echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
 run_prestart_cli onboard --mode local --no-install-daemon
 
+if [[ -n "${OPENCLAW_DOCKER_CONFIG_BATCH_JSON:-}" ]]; then
+  echo ""
+  echo "==> Applying extra Docker setup config"
+  run_prestart_cli config set --batch-json "$OPENCLAW_DOCKER_CONFIG_BATCH_JSON" >/dev/null
+fi
+
 echo ""
 echo "==> Docker gateway defaults"
 sync_gateway_config

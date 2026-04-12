@@ -257,6 +257,34 @@ describe("scripts/docker/setup.sh", () => {
     );
   });
 
+  it("applies OPENCLAW_DOCKER_CONFIG_BATCH_JSON before starting the gateway", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+    const extraBatchJson =
+      '[{"path":"models.providers.ollama.baseUrl","value":"http://host.docker.internal:11434"},{"path":"agents.defaults.model.primary","value":"ollama/qwen3.5:9b"}]';
+
+    await resetDockerLog(activeSandbox);
+    const result = runDockerSetup(activeSandbox, {
+      OPENCLAW_DOCKER_CONFIG_BATCH_JSON: extraBatchJson,
+    });
+
+    expect(result.status).toBe(0);
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const extraConfigIdx = lines.findIndex((line) =>
+      line.includes(`config set --batch-json ${extraBatchJson}`),
+    );
+    const defaultsConfigIdx = lines.findIndex((line) =>
+      line.includes(
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
+      ),
+    );
+    const gatewayStartIdx = findGatewayStartLineIndex(lines);
+
+    expect(extraConfigIdx).toBeGreaterThanOrEqual(0);
+    expect(defaultsConfigIdx).toBeGreaterThan(extraConfigIdx);
+    expect(gatewayStartIdx).toBeGreaterThan(defaultsConfigIdx);
+  });
+
   it("forces BuildKit for local and sandbox docker builds", async () => {
     const activeSandbox = requireSandbox(sandbox);
     await writeFile(join(activeSandbox.rootDir, "Dockerfile.sandbox"), "FROM scratch\n");
