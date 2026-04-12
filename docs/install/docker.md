@@ -140,6 +140,39 @@ The setup script accepts these optional environment variables:
 
 If you already know the config you want, you can inject it directly into the Docker setup flow.
 
+If you want the shortest repo-root path to a Dockerized VK bot with a local
+Ollama model, start from the ready-made batch file at
+`docs/examples/docker/vk-long-poll-local-ollama.batch.json`.
+
+Bash:
+
+```bash
+cp docs/examples/docker/vk-long-poll-local-ollama.batch.json ./docker-vk-local-ollama.batch.json
+# Replace 123456789 with your real VK community id.
+export VK_GROUP_TOKEN='vk1.a.REPLACE_ME'
+export OPENCLAW_DOCKER_CONFIG_BATCH_FILE="$PWD/docker-vk-local-ollama.batch.json"
+./scripts/docker/setup.sh
+```
+
+PowerShell:
+
+```powershell
+Copy-Item docs/examples/docker/vk-long-poll-local-ollama.batch.json docker-vk-local-ollama.batch.json
+# Replace 123456789 with your real VK community id.
+$env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
+$env:OPENCLAW_DOCKER_CONFIG_BATCH_FILE = (Resolve-Path .\docker-vk-local-ollama.batch.json).Path
+bash ./scripts/docker/setup.sh
+```
+
+That batch file already pins:
+
+- `channels.vk.enabled: true`
+- `channels.vk.transport: "long-poll"`
+- `channels.vk.accessToken` as an env-backed SecretRef using `VK_GROUP_TOKEN`
+- `channels.vk.dmPolicy: "pairing"`
+- `models.providers.ollama`
+- default model `ollama/qwen3.5:9b`
+
 For larger configs, prefer a file:
 
 ```bash

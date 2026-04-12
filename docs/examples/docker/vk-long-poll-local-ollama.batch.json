@@ -1,0 +1,60 @@
+[
+  {
+    "path": "agents.defaults.model.primary",
+    "value": "ollama/qwen3.5:9b"
+  },
+  {
+    "path": "agents.defaults.models",
+    "value": {
+      "ollama/qwen3.5:9b": {}
+    }
+  },
+  {
+    "path": "models.providers.ollama",
+    "value": {
+      "baseUrl": "http://host.docker.internal:11434",
+      "apiKey": "ollama-local",
+      "api": "ollama",
+      "models": [
+        {
+          "id": "qwen3.5:9b",
+          "name": "Qwen 3.5 9B",
+          "reasoning": false,
+          "input": ["text"],
+          "cost": {
+            "input": 0,
+            "output": 0,
+            "cacheRead": 0,
+            "cacheWrite": 0
+          },
+          "contextWindow": 32768,
+          "maxTokens": 131072
+        }
+      ]
+    }
+  },
+  {
+    "path": "channels.vk.enabled",
+    "value": true
+  },
+  {
+    "path": "channels.vk.groupId",
+    "value": 123456789
+  },
+  {
+    "path": "channels.vk.transport",
+    "value": "long-poll"
+  },
+  {
+    "path": "channels.vk.accessToken",
+    "value": {
+      "source": "env",
+      "provider": "default",
+      "id": "VK_GROUP_TOKEN"
+    }
+  },
+  {
+    "path": "channels.vk.dmPolicy",
+    "value": "pairing"
+  }
+]
