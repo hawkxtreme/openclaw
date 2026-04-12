@@ -11,6 +11,8 @@ RAW_SANDBOX_SETTING="${OPENCLAW_SANDBOX:-}"
 SANDBOX_ENABLED=""
 DOCKER_SOCKET_PATH="${OPENCLAW_DOCKER_SOCKET:-}"
 TIMEZONE="${OPENCLAW_TZ:-}"
+DOCKER_CONFIG_BATCH_JSON="${OPENCLAW_DOCKER_CONFIG_BATCH_JSON:-}"
+DOCKER_CONFIG_BATCH_FILE="${OPENCLAW_DOCKER_CONFIG_BATCH_FILE:-}"
 
 fail() {
   echo "ERROR: $*" >&2
@@ -260,6 +262,16 @@ if [[ -n "$TIMEZONE" ]]; then
   if ! is_valid_timezone "$TIMEZONE"; then
     fail "OPENCLAW_TZ must match a timezone in /usr/share/zoneinfo (e.g. Asia/Shanghai)."
   fi
+fi
+if [[ -n "$DOCKER_CONFIG_BATCH_JSON" && -n "$DOCKER_CONFIG_BATCH_FILE" ]]; then
+  fail "Set only one of OPENCLAW_DOCKER_CONFIG_BATCH_JSON or OPENCLAW_DOCKER_CONFIG_BATCH_FILE."
+fi
+if [[ -n "$DOCKER_CONFIG_BATCH_FILE" ]]; then
+  validate_mount_path_value "OPENCLAW_DOCKER_CONFIG_BATCH_FILE" "$DOCKER_CONFIG_BATCH_FILE"
+  if [[ ! -f "$DOCKER_CONFIG_BATCH_FILE" ]]; then
+    fail "OPENCLAW_DOCKER_CONFIG_BATCH_FILE does not exist: $DOCKER_CONFIG_BATCH_FILE"
+  fi
+  DOCKER_CONFIG_BATCH_JSON="$(cat "$DOCKER_CONFIG_BATCH_FILE")"
 fi
 
 mkdir -p "$OPENCLAW_CONFIG_DIR"
@@ -515,10 +527,10 @@ echo "Install Gateway daemon: No (managed by Docker Compose)"
 echo ""
 run_prestart_cli onboard --mode local --no-install-daemon
 
-if [[ -n "${OPENCLAW_DOCKER_CONFIG_BATCH_JSON:-}" ]]; then
+if [[ -n "$DOCKER_CONFIG_BATCH_JSON" ]]; then
   echo ""
   echo "==> Applying extra Docker setup config"
-  run_prestart_cli config set --batch-json "$OPENCLAW_DOCKER_CONFIG_BATCH_JSON" >/dev/null
+  run_prestart_cli config set --batch-json "$DOCKER_CONFIG_BATCH_JSON" >/dev/null
 fi
 
 echo ""
