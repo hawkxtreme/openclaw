@@ -11,6 +11,7 @@ const repoRoot = resolve(fileURLToPath(new URL(".", import.meta.url)), "..");
 type DockerSetupSandbox = {
   rootDir: string;
   scriptPath: string;
+  vkScriptPath: string;
   logPath: string;
   binDir: string;
 };
@@ -51,6 +52,7 @@ exit 0
 async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   const rootDir = await sandboxRootTracker.make("suite");
   const scriptPath = join(rootDir, "scripts", "docker", "setup.sh");
+  const vkScriptPath = join(rootDir, "scripts", "docker", "setup-vk-longpoll-local-ollama.sh");
   const dockerfilePath = join(rootDir, "Dockerfile");
   const composePath = join(rootDir, "docker-compose.yml");
   const binDir = join(rootDir, "bin");
@@ -58,7 +60,12 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
 
   await mkdir(join(rootDir, "scripts", "docker"), { recursive: true });
   await copyFile(join(repoRoot, "scripts", "docker", "setup.sh"), scriptPath);
+  await copyFile(
+    join(repoRoot, "scripts", "docker", "setup-vk-longpoll-local-ollama.sh"),
+    vkScriptPath,
+  );
   await chmod(scriptPath, 0o755);
+  await chmod(vkScriptPath, 0o755);
   await writeFile(dockerfilePath, "FROM scratch\n");
   await writeFile(
     composePath,
@@ -66,7 +73,7 @@ async function createDockerSetupSandbox(): Promise<DockerSetupSandbox> {
   );
   await writeDockerStub(binDir, logPath);
 
-  return { rootDir, scriptPath, logPath, binDir };
+  return { rootDir, scriptPath, vkScriptPath, logPath, binDir };
 }
 
 const sandboxRootTracker = createSuiteTempRootTracker({ prefix: "openclaw-docker-setup-" });
@@ -109,6 +116,18 @@ function runDockerSetup(
   overrides: Record<string, string | undefined> = {},
 ) {
   return spawnSync("bash", [sandbox.scriptPath], {
+    cwd: sandbox.rootDir,
+    env: createEnv(sandbox, overrides),
+    encoding: "utf8",
+    stdio: ["ignore", "ignore", "pipe"],
+  });
+}
+
+function runVkDockerSetup(
+  sandbox: DockerSetupSandbox,
+  overrides: Record<string, string | undefined> = {},
+) {
+  return spawnSync("bash", [sandbox.vkScriptPath], {
     cwd: sandbox.rootDir,
     env: createEnv(sandbox, overrides),
     encoding: "utf8",
@@ -302,6 +321,35 @@ describe("scripts/docker/setup.sh", () => {
     const lines = await readDockerLogLines(activeSandbox);
     const extraConfigIdx = lines.findIndex((line) =>
       line.includes(`config set --batch-json ${extraBatchJson}`),
+    );
+    const defaultsConfigIdx = lines.findIndex((line) =>
+      line.includes(
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
+      ),
+    );
+    const gatewayStartIdx = findGatewayStartLineIndex(lines);
+
+    expect(extraConfigIdx).toBeGreaterThanOrEqual(0);
+    expect(defaultsConfigIdx).toBeGreaterThan(extraConfigIdx);
+    expect(gatewayStartIdx).toBeGreaterThan(defaultsConfigIdx);
+  });
+
+  it("bootstraps VK long-poll plus local Ollama through the dedicated wrapper", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runVkDockerSetup(activeSandbox, {
+      VK_GROUP_ID: "237442417",
+      VK_GROUP_TOKEN: "vk1.a.REPLACE_ME",
+    });
+
+    expect(result.status).toBe(0);
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const extraConfigIdx = lines.findIndex((line) =>
+      line.includes(
+        'config set --batch-json [{"path":"agents.defaults.model.primary","value":"ollama/qwen3.5:9b"},{"path":"agents.defaults.models","value":{"ollama/qwen3.5:9b":{}}},{"path":"models.providers.ollama","value":{"baseUrl":"http://host.docker.internal:11434","apiKey":"ollama-local","api":"ollama","models":[{"id":"qwen3.5:9b","name":"Qwen 3.5 9B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32768,"maxTokens":131072}]}},{"path":"channels.vk.enabled","value":true},{"path":"channels.vk.groupId","value":237442417},{"path":"channels.vk.transport","value":"long-poll"},{"path":"channels.vk.accessToken","value":{"source":"env","provider":"default","id":"VK_GROUP_TOKEN"}},{"path":"channels.vk.dmPolicy","value":"pairing"}]',
+      ),
     );
     const defaultsConfigIdx = lines.findIndex((line) =>
       line.includes(

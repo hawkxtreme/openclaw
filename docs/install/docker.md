@@ -144,6 +144,25 @@ If you want the shortest repo-root path to a Dockerized VK bot with a local
 Ollama model, start from the ready-made batch file at
 `docs/examples/docker/vk-long-poll-local-ollama.batch.json`.
 
+If you want an even shorter path, use the wrapper script instead:
+
+```bash
+export VK_GROUP_ID=123456789
+export VK_GROUP_TOKEN='vk1.a.REPLACE_ME'
+./scripts/docker/setup-vk-longpoll-local-ollama.sh
+```
+
+PowerShell:
+
+```powershell
+$env:VK_GROUP_ID = "123456789"
+$env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
+bash ./scripts/docker/setup-vk-longpoll-local-ollama.sh
+```
+
+The wrapper generates the same batch config as the example file, keeps the
+token as an env-backed SecretRef, and forwards into `./scripts/docker/setup.sh`.
+
 Bash:
 
 ```bash
