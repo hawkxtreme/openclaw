@@ -217,6 +217,7 @@ describe("vk long poll monitor", () => {
     const account = createAccount();
     const serverRequests: string[] = [];
     const pollRequests: string[] = [];
+    const warnings: string[] = [];
     let pollCalls = 0;
 
     const monitor = createVkLongPollMonitor({
@@ -242,7 +243,14 @@ describe("vk long poll monitor", () => {
         pollRequests.push(url);
         pollCalls += 1;
         if (pollCalls === 1) {
-          throw new TypeError("fetch failed");
+          const error = new TypeError("fetch failed") as TypeError & {
+            cause?: { code?: string; message?: string };
+          };
+          error.cause = {
+            code: "ECONNRESET",
+            message: "socket hang up",
+          };
+          throw error;
         }
 
         return new Response(
@@ -270,6 +278,11 @@ describe("vk long poll monitor", () => {
       onMessage: () => {
         monitor.stop("received-after-transient-retry");
       },
+      logger: {
+        warn: (message) => {
+          warnings.push(message);
+        },
+      },
     });
 
     await monitor.start();
@@ -278,6 +291,9 @@ describe("vk long poll monitor", () => {
     expect(pollRequests).toHaveLength(2);
     expect(pollRequests[0]).toContain("https://lp.vk.test/transient");
     expect(pollRequests[1]).toContain("https://lp.vk.test/transient");
+    expect(warnings).toEqual([
+      "[default] VK long poll transport error: fetch failed (ECONNRESET: socket hang up); retrying current long poll server",
+    ]);
     expect(monitor.getStatus()).toMatchObject({
       state: "stopped",
       reconnectAttempts: 1,

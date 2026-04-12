@@ -15,6 +15,25 @@ function isAbortError(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+function renderTransportError(error: unknown): string {
+  if (!(error instanceof Error)) {
+    return String(error);
+  }
+
+  const cause =
+    error.cause && typeof error.cause === "object"
+      ? (error.cause as Record<string, unknown>)
+      : null;
+  const code = typeof cause?.code === "string" ? cause.code : undefined;
+  const causeMessage = typeof cause?.message === "string" ? cause.message : undefined;
+  if (!code && !causeMessage) {
+    return error.message;
+  }
+
+  const details = [code, causeMessage].filter(Boolean).join(": ");
+  return `${error.message} (${details})`;
+}
+
 function delay(ms: number, signal: AbortSignal): Promise<void> {
   if (ms <= 0 || signal.aborted) {
     return Promise.resolve();
@@ -174,7 +193,7 @@ export function createVkLongPollMonitor(options: VkLongPollMonitorOptions): VkLo
             break;
           }
 
-          const message = error instanceof Error ? error.message : String(error);
+          const message = renderTransportError(error);
           patchStatus({
             state: "reconnecting",
             connected: false,
@@ -336,7 +355,7 @@ export function createVkLongPollMonitor(options: VkLongPollMonitorOptions): VkLo
           break;
         }
 
-        const message = error instanceof Error ? error.message : String(error);
+        const message = renderTransportError(error);
         patchStatus({
           state: "reconnecting",
           connected: false,
