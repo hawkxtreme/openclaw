@@ -5,6 +5,7 @@ import { normalizeVkMessageNewUpdate } from "../inbound/normalize.js";
 import type {
   VkLongPollMonitor,
   VkLongPollMonitorOptions,
+  VkLongPollResponse,
   VkLongPollMonitorStatus,
   VkLongPollServer,
 } from "../types/longpoll.js";
@@ -158,14 +159,36 @@ export function createVkLongPollMonitor(options: VkLongPollMonitorOptions): VkLo
           server = await connectServer(groupId);
         }
 
-        const response = await pollVkLongPoll({
-          server: server.server,
-          key: server.key,
-          ts: server.ts,
-          waitSeconds: options.waitSeconds,
-          signal: controller.signal,
-          fetchImpl,
-        });
+        let response: VkLongPollResponse;
+        try {
+          response = await pollVkLongPoll({
+            server: server.server,
+            key: server.key,
+            ts: server.ts,
+            waitSeconds: options.waitSeconds,
+            signal: controller.signal,
+            fetchImpl,
+          });
+        } catch (error) {
+          if (controller.signal.aborted && isAbortError(error)) {
+            break;
+          }
+
+          const message = error instanceof Error ? error.message : String(error);
+          patchStatus({
+            state: "reconnecting",
+            connected: false,
+            lastError: message,
+            lastDisconnectAt: now(),
+            lastReconnectAt: now(),
+            reconnectAttempts: status.reconnectAttempts + 1,
+          });
+          options.logger?.warn?.(
+            `[${options.account.accountId}] VK long poll transport error: ${message}; retrying current long poll server`,
+          );
+          await delay(reconnectDelayMs, controller.signal);
+          continue;
+        }
 
         if (response.failed) {
           if (response.failed === 1 && response.ts) {

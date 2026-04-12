@@ -213,6 +213,79 @@ describe("vk long poll monitor", () => {
     });
   });
 
+  it("retries the current long poll server after a transient poll fetch failure", async () => {
+    const account = createAccount();
+    const serverRequests: string[] = [];
+    const pollRequests: string[] = [];
+    let pollCalls = 0;
+
+    const monitor = createVkLongPollMonitor({
+      account,
+      waitSeconds: 1,
+      reconnectDelayMs: 0,
+      fetchImpl: async (input) => {
+        const url = String(input);
+
+        if (url.includes("groups.getLongPollServer")) {
+          serverRequests.push(url);
+          return new Response(
+            JSON.stringify({
+              response: {
+                server: "https://lp.vk.test/transient",
+                key: "transient-key",
+                ts: "500",
+              },
+            }),
+          );
+        }
+
+        pollRequests.push(url);
+        pollCalls += 1;
+        if (pollCalls === 1) {
+          throw new TypeError("fetch failed");
+        }
+
+        return new Response(
+          JSON.stringify({
+            ts: "501",
+            updates: [
+              {
+                type: "message_new",
+                group_id: 77,
+                event_id: "evt-transient-1",
+                object: {
+                  message: {
+                    id: 901,
+                    peer_id: 42,
+                    from_id: 42,
+                    text: "Recovered after transient error",
+                    date: 1_700_000_300,
+                  },
+                },
+              },
+            ],
+          }),
+        );
+      },
+      onMessage: () => {
+        monitor.stop("received-after-transient-retry");
+      },
+    });
+
+    await monitor.start();
+
+    expect(serverRequests).toHaveLength(1);
+    expect(pollRequests).toHaveLength(2);
+    expect(pollRequests[0]).toContain("https://lp.vk.test/transient");
+    expect(pollRequests[1]).toContain("https://lp.vk.test/transient");
+    expect(monitor.getStatus()).toMatchObject({
+      state: "stopped",
+      reconnectAttempts: 1,
+      deliveredEvents: 1,
+      stopReason: "received-after-transient-retry",
+    });
+  });
+
   it("stops cleanly while waiting for a long poll response", async () => {
     const account = createAccount();
     let pollWasAborted = false;
