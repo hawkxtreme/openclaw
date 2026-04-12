@@ -1,7 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { chmod, copyFile, mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { createServer } from "node:net";
-import { join, resolve } from "node:path";
+import { delimiter, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createSuiteTempRootTracker } from "./test-helpers/temp-dir.js";
@@ -83,7 +83,7 @@ function createEnv(
   overrides: Record<string, string | undefined> = {},
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {
-    PATH: `${sandbox.binDir}:${process.env.PATH ?? ""}`,
+    PATH: `${sandbox.binDir}${delimiter}${process.env.PATH ?? ""}`,
     HOME: process.env.HOME ?? sandbox.rootDir,
     LANG: process.env.LANG,
     LC_ALL: process.env.LC_ALL,

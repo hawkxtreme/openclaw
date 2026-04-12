@@ -165,7 +165,7 @@ PowerShell:
 ```powershell
 $env:VK_GROUP_ID = "123456789"
 $env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
-bash ./scripts/docker/setup-vk-longpoll-local-ollama.sh
+.\scripts\docker\setup-vk-longpoll-local-ollama.ps1
 ```
 
 Or:
@@ -173,7 +173,7 @@ Or:
 ```powershell
 $env:VK_GROUP = "https://vk.com/club123456789"
 $env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
-bash ./scripts/docker/setup-vk-longpoll-local-ollama.sh
+.\scripts\docker\setup-vk-longpoll-local-ollama.ps1
 ```
 
 The wrapper generates the same batch config as the example file, keeps the
