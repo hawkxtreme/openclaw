@@ -395,6 +395,7 @@ export function buildVkToolsGroupListChannelData(params: {
   return toChannelData(appendBackAndCloseRow(rows, "/commands"), {
     inline: true,
     oneTime: false,
+    longPollInlineCallback: true,
   });
 }
 
@@ -450,6 +451,7 @@ export function buildVkToolsListChannelData(params: {
   return toChannelData(rows, {
     inline: true,
     oneTime: false,
+    longPollInlineCallback: true,
   });
 }
 
@@ -476,6 +478,7 @@ export function buildVkToolDetailsChannelData(params: {
     {
       inline: true,
       oneTime: false,
+      longPollInlineCallback: true,
     },
   );
 }

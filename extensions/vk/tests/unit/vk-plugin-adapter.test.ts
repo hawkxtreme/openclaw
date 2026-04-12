@@ -367,6 +367,7 @@ describe("vk plugin adapters", () => {
       vk: {
         inline: true,
         oneTime: false,
+        longPollInlineCallback: true,
         buttons: [
           [
             { text: "Built-in (20)", callback_data: "/tools core" },
@@ -395,6 +396,7 @@ describe("vk plugin adapters", () => {
       vk: {
         inline: true,
         oneTime: false,
+        longPollInlineCallback: true,
         buttons: [
           [
             { text: "Browser", callback_data: "/tools plugin browser" },
@@ -418,6 +420,7 @@ describe("vk plugin adapters", () => {
       vk: {
         inline: true,
         oneTime: false,
+        longPollInlineCallback: true,
         buttons: [
           [
             { text: "< Back", callback_data: "/tools plugin 2" },

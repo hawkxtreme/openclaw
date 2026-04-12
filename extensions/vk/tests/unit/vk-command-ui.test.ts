@@ -22,6 +22,7 @@ describe("vk command ui", () => {
     });
 
     expect(channelData).not.toBeNull();
+    expect(channelData?.vk?.longPollInlineCallback).toBe(true);
     expect(getButtonLabels(channelData!)).toEqual([
       ["Built-in (23)", "Connected (3)"],
       ["< Back", "Close"],
