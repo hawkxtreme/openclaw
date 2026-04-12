@@ -3,6 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 VK_GROUP_ID="${VK_GROUP_ID:-}"
+VK_GROUP="${VK_GROUP:-}"
 VK_GROUP_TOKEN="${VK_GROUP_TOKEN:-}"
 VK_DM_POLICY="${OPENCLAW_VK_DM_POLICY:-pairing}"
 OLLAMA_BASE_URL="${OPENCLAW_OLLAMA_BASE_URL:-http://host.docker.internal:11434}"
@@ -14,12 +15,41 @@ fail() {
   exit 1
 }
 
+normalize_vk_group_id() {
+  local raw="$1"
+
+  if [[ "$raw" =~ ^[1-9][0-9]*$ ]]; then
+    printf '%s' "$raw"
+    return 0
+  fi
+
+  if [[ "$raw" =~ ^(club|public)([1-9][0-9]*)$ ]]; then
+    printf '%s' "${BASH_REMATCH[2]}"
+    return 0
+  fi
+
+  if [[ "$raw" =~ ^(https?://)?(m\.)?vk\.com/(club|public)([1-9][0-9]*)(/)?([?#].*)?$ ]]; then
+    printf '%s' "${BASH_REMATCH[4]}"
+    return 0
+  fi
+
+  return 1
+}
+
+if [[ -n "$VK_GROUP_ID" && -n "$VK_GROUP" ]]; then
+  fail "Set only one of VK_GROUP_ID or VK_GROUP"
+fi
+
+if [[ -n "$VK_GROUP" ]]; then
+  VK_GROUP_ID="$(normalize_vk_group_id "$VK_GROUP")" || fail "VK_GROUP must be a positive id, club/public handle, or vk.com community URL"
+fi
+
 if [[ -z "$VK_GROUP_ID" ]]; then
-  fail "VK_GROUP_ID is required"
+  fail "VK_GROUP_ID or VK_GROUP is required"
 fi
 
 if [[ ! "$VK_GROUP_ID" =~ ^[1-9][0-9]*$ ]]; then
-  fail "VK_GROUP_ID must be a positive integer"
+  fail "VK_GROUP_ID must resolve to a positive integer"
 fi
 
 if [[ -z "$VK_GROUP_TOKEN" ]]; then

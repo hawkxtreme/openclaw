@@ -155,6 +155,14 @@ function findGatewayStartLineIndex(lines: string[]) {
   return lines.findIndex((line) => isGatewayStartLine(line));
 }
 
+function findVkWrapperBatchConfigLineIndex(lines: string[], groupId: string) {
+  return lines.findIndex((line) =>
+    line.includes(
+      `config set --batch-json [{"path":"agents.defaults.model.primary","value":"ollama/qwen3.5:9b"},{"path":"agents.defaults.models","value":{"ollama/qwen3.5:9b":{}}},{"path":"models.providers.ollama","value":{"baseUrl":"http://host.docker.internal:11434","apiKey":"ollama-local","api":"ollama","models":[{"id":"qwen3.5:9b","name":"Qwen 3.5 9B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32768,"maxTokens":131072}]}},{"path":"channels.vk.enabled","value":true},{"path":"channels.vk.groupId","value":${groupId}},{"path":"channels.vk.transport","value":"long-poll"},{"path":"channels.vk.accessToken","value":{"source":"env","provider":"default","id":"VK_GROUP_TOKEN"}},{"path":"channels.vk.dmPolicy","value":"pairing"}]`,
+    ),
+  );
+}
+
 async function runDockerSetupWithUnsetGatewayToken(
   sandbox: DockerSetupSandbox,
   suffix: string,
@@ -346,11 +354,32 @@ describe("scripts/docker/setup.sh", () => {
     expect(result.status).toBe(0);
 
     const lines = await readDockerLogLines(activeSandbox);
-    const extraConfigIdx = lines.findIndex((line) =>
+    const extraConfigIdx = findVkWrapperBatchConfigLineIndex(lines, "237442417");
+    const defaultsConfigIdx = lines.findIndex((line) =>
       line.includes(
-        'config set --batch-json [{"path":"agents.defaults.model.primary","value":"ollama/qwen3.5:9b"},{"path":"agents.defaults.models","value":{"ollama/qwen3.5:9b":{}}},{"path":"models.providers.ollama","value":{"baseUrl":"http://host.docker.internal:11434","apiKey":"ollama-local","api":"ollama","models":[{"id":"qwen3.5:9b","name":"Qwen 3.5 9B","reasoning":false,"input":["text"],"cost":{"input":0,"output":0,"cacheRead":0,"cacheWrite":0},"contextWindow":32768,"maxTokens":131072}]}},{"path":"channels.vk.enabled","value":true},{"path":"channels.vk.groupId","value":237442417},{"path":"channels.vk.transport","value":"long-poll"},{"path":"channels.vk.accessToken","value":{"source":"env","provider":"default","id":"VK_GROUP_TOKEN"}},{"path":"channels.vk.dmPolicy","value":"pairing"}]',
+        'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',
       ),
     );
+    const gatewayStartIdx = findGatewayStartLineIndex(lines);
+
+    expect(extraConfigIdx).toBeGreaterThanOrEqual(0);
+    expect(defaultsConfigIdx).toBeGreaterThan(extraConfigIdx);
+    expect(gatewayStartIdx).toBeGreaterThan(defaultsConfigIdx);
+  });
+
+  it("accepts a VK community URL in the dedicated wrapper", async () => {
+    const activeSandbox = requireSandbox(sandbox);
+
+    await resetDockerLog(activeSandbox);
+    const result = runVkDockerSetup(activeSandbox, {
+      VK_GROUP: "https://vk.com/club237442417",
+      VK_GROUP_TOKEN: "vk1.a.REPLACE_ME",
+    });
+
+    expect(result.status).toBe(0);
+
+    const lines = await readDockerLogLines(activeSandbox);
+    const extraConfigIdx = findVkWrapperBatchConfigLineIndex(lines, "237442417");
     const defaultsConfigIdx = lines.findIndex((line) =>
       line.includes(
         'config set --batch-json [{"path":"gateway.mode","value":"local"},{"path":"gateway.bind","value":"lan"},{"path":"gateway.controlUi.allowedOrigins","value":["http://localhost:18789","http://127.0.0.1:18789"]}]',

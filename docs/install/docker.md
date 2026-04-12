@@ -152,10 +152,26 @@ export VK_GROUP_TOKEN='vk1.a.REPLACE_ME'
 ./scripts/docker/setup-vk-longpoll-local-ollama.sh
 ```
 
+Or paste the community URL directly:
+
+```bash
+export VK_GROUP='https://vk.com/club123456789'
+export VK_GROUP_TOKEN='vk1.a.REPLACE_ME'
+./scripts/docker/setup-vk-longpoll-local-ollama.sh
+```
+
 PowerShell:
 
 ```powershell
 $env:VK_GROUP_ID = "123456789"
+$env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
+bash ./scripts/docker/setup-vk-longpoll-local-ollama.sh
+```
+
+Or:
+
+```powershell
+$env:VK_GROUP = "https://vk.com/club123456789"
 $env:VK_GROUP_TOKEN = "vk1.a.REPLACE_ME"
 bash ./scripts/docker/setup-vk-longpoll-local-ollama.sh
 ```
